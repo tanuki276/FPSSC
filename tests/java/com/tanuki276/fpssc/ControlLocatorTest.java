@@ -48,6 +48,11 @@ public final class ControlLocatorTest {
         circle(rings,96,225,38,0xff287f9a); circle(rings,96,225,35,0xff000000);
         circle(rings,550,180,37,0xffbc8038); circle(rings,550,180,34,0xff000000);
         check(l.detect(rings)!=null,"hollow idle joystick rims must be recognized");
+        ControlLocator dragged = new ControlLocator();
+        dragged.update(a,1000,true); dragged.update(a,1120,true); var anchor=dragged.update(a,1240,true);
+        var thumbMoved=dragged.update(scene(640,300,.16f,.79f,.86f,.60f,true),1360,true);
+        check(thumbMoved!=null,"our own thumb drag must not invalidate the base center");
+        check(thumbMoved.profile().equals(anchor.profile()),"confirmed base center followed the dragged thumb");
         System.out.println("ControlLocator: "+checks+" regression checks passed");
     }
 }

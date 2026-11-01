@@ -34,7 +34,7 @@ final class ControlLocator {
                 lastVisibleMs = nowMs;
                 if (candidate != null && close(candidate.profile(), found.profile())) confirmations++;
                 else { candidate = found; confirmations = 1; }
-                if (locked != null && !close(locked.profile(), found.profile())) locked = null;
+                if (locked != null && !sameControlArtwork(locked.profile(), found.profile())) locked = null;
                 if (confirmations >= 3 && locked == null) locked = found;
             } else {
                 candidate = null;
@@ -51,6 +51,14 @@ final class ControlLocator {
     void clear() {
         locked = null; candidate = null; confirmations = 0;
         lastVisibleMs = 0; lastScanMs = -1000;
+    }
+    private boolean sameControlArtwork(TouchProfile anchor,TouchProfile observed) {
+        // A dragged thumb moves inside the joystick. Keep the confirmed base center;
+        // do not mistake our own injected drag for a user changing the control layout.
+        float aspect=width/(float)height;
+        float tolerance=anchor.radius()*1.6f;
+        return Math.hypot((anchor.moveX()-observed.moveX())*aspect,anchor.moveY()-observed.moveY())<tolerance
+                &&Math.hypot((anchor.attackX()-observed.attackX())*aspect,anchor.attackY()-observed.attackY())<tolerance;
     }
     private static boolean close(TouchProfile a, TouchProfile b) {
         return Math.abs(a.moveX()-b.moveX()) < .02f && Math.abs(a.moveY()-b.moveY()) < .035f
