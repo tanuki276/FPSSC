@@ -20,6 +20,25 @@ public final class TouchService extends AccessibilityService {
     private final java.util.concurrent.atomic.AtomicBoolean pending = new java.util.concurrent.atomic.AtomicBoolean();
     private long generation;
     private long lastAccepted;
+    private static volatile String lastGameStatus = "まだゲームの前面イベントを受け取っていません";
+    private static volatile long lastGameAt;
+    private volatile long foregroundEventAt;
+    private long acceptedCount;
+    private long completedCount;
+    private long cancelledCount;
+    static String diagnostics() {
+        TouchService service = instance;
+        long now = SystemClock.elapsedRealtime();
+        return inputStatus + "\n直近のゲーム中の状態: " + lastGameStatus
+                + (lastGameAt == 0 ? "" : " (" + (now-lastGameAt) + " ms前)")
+                + (service == null ? "" : "\n前面イベント経過=" + (now-service.foregroundEventAt)
+                + " ms 送信=" + service.acceptedCount + " 完了=" + service.completedCount + " 中断=" + service.cancelledCount);
+    }
+    private void gameStatus(String value) {
+        inputStatus = value;
+        lastGameStatus = value;
+        lastGameAt = SystemClock.elapsedRealtime();
+    }
     static volatile String inputStatus = "操作サービス未接続";
 
     static boolean isArmed() { return armed; }
@@ -48,6 +67,7 @@ public final class TouchService extends AccessibilityService {
     @Override public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && event.getPackageName() != null) {
             foreground = event.getPackageName().toString();
+            foregroundEventAt = SystemClock.elapsedRealtime();
         }
     }
     @Override public void onInterrupt() { arm(false); }
@@ -65,21 +85,21 @@ public final class TouchService extends AccessibilityService {
             return;
         }
         if (now - frameTime > 200 || now < frameTime) {
-            inputStatus = "操作保留: 判断が古い " + (now - frameTime) + " ms";
+            gameStatus("操作保留: 判断が古い " + (now - frameTime) + " ms");
             return;
         }
         DisplayMetrics metrics = new DisplayMetrics();
         getSystemService(android.view.WindowManager.class).getDefaultDisplay().getRealMetrics(metrics);
         if (width <= height || width != metrics.widthPixels || height != metrics.heightPixels) {
-            inputStatus = "停止: 横画面の全画面共有で開始してください";
+            gameStatus("停止: 横画面の全画面共有で開始してください");
             return;
         }
         if (now - lastAccepted < 100) return;
-        if (profile == null) { inputStatus = "操作保留: 操作ボタンの自動認識を待っています"; return; }
+        if (profile == null) { gameStatus("操作保留: 操作ボタンの自動認識を待っています"); return; }
         GestureDescription.Builder builder = new GestureDescription.Builder();
         boolean movement = command.move().len() > .01f;
         boolean fire = command.fire() && command.aim().len() > .01f;
-        if (!movement && !fire) { inputStatus = "操作保留: " + command.reason(); return; }
+        if (!movement && !fire) { gameStatus("操作保留: " + command.reason()); return; }
         if (movement) builder.addStroke(stroke(profile.moveX(), profile.moveY(), command.move(), profile.radius(), width, height));
         if (fire) builder.addStroke(stroke(profile.attackX(), profile.attackY(), command.aim(), profile.radius(), width, height));
         busy = true;
@@ -87,14 +107,15 @@ public final class TouchService extends AccessibilityService {
         long token = ++generation;
         try {
             boolean accepted = dispatchGesture(builder.build(), new GestureResultCallback() {
-                @Override public void onCompleted(GestureDescription gesture) { busy = false; }
+                @Override public void onCompleted(GestureDescription gesture) { busy = false; completedCount++; }
                 @Override public void onCancelled(GestureDescription gesture) {
                     busy = false;
+                    cancelledCount++;
                     if (generation == token) { armed = false; inputStatus = "操作が中断されました。再度 ON にしてください"; }
                 }
             }, main);
             if (!accepted) { busy = false; armed = false; inputStatus = "操作を送信できませんでした"; }
-            else inputStatus = "操作中: move=" + movement + " fire=" + fire;
+            else { acceptedCount++; gameStatus("操作中: move=" + movement + " fire=" + fire); }
         } catch (RuntimeException e) {
             busy = false;
             arm(false);

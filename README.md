@@ -1,14 +1,14 @@
 # FPSSC
 
 Android-only screen perception and experimental touch-control app for Brawl Stars.
-Version **0.2.0** automatically locates visible movement and normal-attack controls.
+Version **0.2.1** automatically locates visible movement and normal-attack controls.
 There are no coordinate fields or save/calibration buttons.
 
 ## Install and start
 
 1. Open a successful [Validate workflow run](https://github.com/tanuki276/FPSSC/actions),
    download the **FPSSC-debug-apk** artifact, unzip it and install `app-debug.apk`.
-2. Open FPSSC. The title should show **0.2.0**.
+2. Open FPSSC. The title should show **0.2.1**.
 3. Use **操作サービスを有効にする** to enable FPSSC in Android Accessibility settings.
 4. Press **画面共有を開始** in landscape and choose the entire screen.
 5. Turn **自動操作** ON and switch to the Brawl Stars practice scene.
@@ -17,8 +17,7 @@ There are no coordinate fields or save/calibration buttons.
 7. Stop from the persistent notification's **停止** action or FPSSC's **停止** button.
 
 Automatic control starts OFF. Old saved coordinate preferences are ignored.
-If the app cannot recognize the scene or buttons, diagnostics explain why input is
-withheld. **診断結果を共有** includes perception and input status.
+If the app cannot recognize the scene or buttons, diagnostics include separate movement/attack candidate counts. The last game-foreground input status and gesture sent/completed/cancelled counters remain visible when returning to FPSSC. **診断結果を共有** includes perception and input status.
 
 ## Implementation
 

@@ -16,6 +16,7 @@ final class ControlLocator {
     private long lastVisibleMs;
     private long lastScanMs = -1000;
     private String status = "操作ボタンを検索中";
+    private String detectionDetail = "未走査";
 
     Layout update(Bitmap frame, long nowMs, boolean inMatch) {
         if (frame.getWidth() != width || frame.getHeight() != height || !inMatch) {
@@ -39,7 +40,7 @@ final class ControlLocator {
         }
         // Joystick artwork may be temporarily covered by a gesture or effects, not indefinitely.
         if (locked != null && nowMs - lastVisibleMs > 1500) locked = null;
-        status = locked == null ? "操作ボタンを自動認識中 (" + confirmations + "/3)"
+        status = locked == null ? "操作ボタンを自動認識中 (" + confirmations + "/3) " + detectionDetail
                 : "操作位置を自動認識済み";
         return locked;
     }
@@ -54,9 +55,10 @@ final class ControlLocator {
     }
     Layout detect(Bitmap bitmap) {
         int w = bitmap.getWidth(), h = bitmap.getHeight();
-        if (w <= h || h < 96) return null;
+        if (w <= h || h < 96) { detectionDetail = "横画面ではありません"; return null; }
         List<Candidate> movement = components(bitmap, true);
         List<Candidate> attack = components(bitmap, false);
+        detectionDetail = "移動候補=" + movement.size() + " 攻撃候補=" + attack.size();
         if (movement.isEmpty() || attack.isEmpty()) return null;
         Candidate m = movement.stream().max(java.util.Comparator.comparingDouble(Candidate::score)).orElseThrow();
         Candidate a = attack.stream().max(java.util.Comparator.comparingDouble(Candidate::score)).orElseThrow();
