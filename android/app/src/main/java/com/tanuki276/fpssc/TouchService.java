@@ -31,13 +31,13 @@ public final class TouchService extends AccessibilityService {
             if (instance != null) instance.generation++;
         });
     }
-    static void submit(AgentCore.ControlCommand command, long frameTime, int width, int height) {
+    static void submit(AgentCore.ControlCommand command, TouchProfile profile, long frameTime, int width, int height) {
         TouchService service = instance;
         if (service == null || !armed) return;
         // Never enqueue an unbounded stream of old commands on the UI thread.
         if (!service.pending.compareAndSet(false, true)) return;
         service.main.post(() -> {
-            try { service.apply(command, frameTime, width, height); }
+            try { service.apply(command, profile, frameTime, width, height); }
             finally { service.pending.set(false); }
         });
     }
@@ -57,7 +57,7 @@ public final class TouchService extends AccessibilityService {
         main.removeCallbacksAndMessages(null);
         super.onDestroy();
     }
-    private void apply(AgentCore.ControlCommand command, long frameTime, int width, int height) {
+    private void apply(AgentCore.ControlCommand command, TouchProfile profile, long frameTime, int width, int height) {
         long now = SystemClock.elapsedRealtime();
         if (!armed || busy) return;
         if (!GAME.equals(foreground)) {
@@ -75,13 +75,7 @@ public final class TouchService extends AccessibilityService {
             return;
         }
         if (now - lastAccepted < 100) return;
-        android.content.SharedPreferences prefs = getSharedPreferences("controls", MODE_PRIVATE);
-        if (!prefs.getBoolean("calibrated", false)) return;
-        TouchProfile profile;
-        try {
-            profile = new TouchProfile(prefs.getFloat("moveX", .15f), prefs.getFloat("moveY", .8f),
-                    prefs.getFloat("attackX", .88f), prefs.getFloat("attackY", .75f), prefs.getFloat("radius", .06f));
-        } catch (IllegalArgumentException e) { arm(false); return; }
+        if (profile == null) { inputStatus = "操作保留: 操作ボタンの自動認識を待っています"; return; }
         GestureDescription.Builder builder = new GestureDescription.Builder();
         boolean movement = command.move().len() > .01f;
         boolean fire = command.fire() && command.aim().len() > .01f;
@@ -109,7 +103,7 @@ public final class TouchService extends AccessibilityService {
     }
     private static GestureDescription.StrokeDescription stroke(float x, float y, AgentCore.Vec2 direction,
             float radius, int width, int height) {
-        AgentCore.Vec2 vector = direction.clampLen(1);
+        AgentCore.Vec2 vector = TouchProfile.screenVector(direction, width, height);
         Path path = new Path();
         path.moveTo(x * width, y * height);
         path.lineTo(Math.max(1, Math.min(width - 1, x * width + vector.x() * radius * height)),

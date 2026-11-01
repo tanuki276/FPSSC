@@ -1,184 +1,86 @@
 # FPSSC
 
-FPSSC is now primarily an **Android real-time game-vision research harness** inspired by the architecture of COSC and by public Windows Brawl Stars automation projects that separate perception, tracking, tactical decisions, and controls.
+Android-only screen perception and experimental touch-control app for Brawl Stars.
+Version **0.2.0** automatically locates visible movement and normal-attack controls.
+There are no coordinate fields or save/calibration buttons.
 
-The Android implementation lives under `android/`.
+## Install and start
 
-## Android architecture
+1. Open a successful [Validate workflow run](https://github.com/tanuki276/FPSSC/actions),
+   download the **FPSSC-debug-apk** artifact, unzip it and install `app-debug.apk`.
+2. Open FPSSC. The title should show **0.2.0**.
+3. Use **操作サービスを有効にする** to enable FPSSC in Android Accessibility settings.
+4. Press **画面共有を開始** in landscape and choose the entire screen.
+5. Turn **自動操作** ON and switch to the Brawl Stars practice scene.
+6. Once the player and visible joystick artwork are recognized, the app acquires
+   movement/attack centers automatically. Positions must agree across three scans.
+7. Stop from the persistent notification's **停止** action or FPSSC's **停止** button.
 
-```text
-MediaProjection
-    ↓
-ImageReader / latest frame
-    ↓
-VisionPipeline
-    ↓
-WorldState
-  ├─ player
-  ├─ enemies
-  └─ projectiles
-    ↓
-TacticalPolicy
-  ├─ approach
-  ├─ kite
-  ├─ projectile dodge
-  └─ predicted aim
-    ↓
-ControlCommand
-  ├─ move vector
-  ├─ aim vector
-  ├─ fire
-  └─ super
-    ↓
-diagnostics / optional touch backend
-```
+Automatic control starts OFF. Old saved coordinate preferences are ignored.
+If the app cannot recognize the scene or buttons, diagnostics explain why input is
+withheld. **診断結果を共有** includes perception and input status.
 
-The Android app includes an optional AccessibilityService touch backend. Capture and automatic control are separate: automatic control starts OFF and requires explicit activation and a saved touch profile. This is an experimental backend; recognition accuracy and actual game behavior have not been validated on a device.
+## Implementation
 
-## Why this structure
+- `AgentService`: full-display MediaProjection capture, latest-image processing,
+  resource lifecycle, telemetry, scene/layout/input coordination.
+- `AgentCore`: health-bar-based player/enemy detection, temporal tracking, moving
+  projectile candidates and range/aim/dodge decisions.
+- `ControlLocator`: image-derived joystick centers, three-observation confirmation,
+  short-occlusion tolerance, layout expiry and automatic reacquisition.
+- `TouchService`: Android AccessibilityService gesture input; at most one pending
+  command, foreground-package gating, full-display dimension checks, age limit,
+  explicit stop, and aspect-correct gesture directions.
+- `MainActivity`: start/stop, service setup, automatic-control switch and diagnostics.
 
-Public Windows projects commonly split the system into roughly the same pieces:
+Launcher/round/themed icons and a monochrome notification icon are included as
+Android vector/adaptive resources. No bitmap downloads or external icon fonts are
+required.
 
-- screen capture / emulator integration
-- object detection (often YOLO/OpenCV)
-- tracking and state extraction
-- tactical logic such as movement, aiming and dodging
-- a separate control backend
+For source reviews and what was actually adopted, see
+[Implementation references](docs/IMPLEMENTATION_REFERENCES.md).
 
-FPSSC maps those layers onto Android instead of copying a Windows emulator input backend:
+## Validation
 
-- Windows capture → Android `MediaProjection`
-- desktop detector → `VisionPipeline`
-- tactical module → `TacticalPolicy`
-- mouse/keyboard/emulator controller → `ControlCommand` abstraction
-
-This is also a natural extension of COSC, whose strongest reusable part is its fast capture → analyze → decide loop.
-
-## Current Android prototype
-
-`android/app/src/main/java/com/tanuki276/fpssc/`
-
-- `MainActivity.java` — requests screen-capture permission
-- `AgentService.java` — foreground MediaProjection capture loop, latest-frame processing, telemetry
-- `AgentCore.java` — normalized coordinates, lightweight color/blob baseline detector, velocity estimation, projectile dodge, predicted aim, range management
-
-The detector is intentionally a simple baseline. For more serious experiments, replace `VisionPipeline` with an ONNX/TFLite detector or a purpose-built OpenCV pipeline while leaving the rest of the agent unchanged.
-
-## Build
-
-Open the `android/` directory in Android Studio, or use a local Gradle installation compatible with Android Gradle Plugin 8.7.x.
-
-Requirements:
-
-- Android SDK 35
-- Java 17
-- Android 8.0+ (`minSdk 26`)
-
-## Relationship to COSC
-
-COSC is specialized for a small discrete action space. FPSSC generalizes the decision output to 2D vectors:
-
-```text
-move = (x, y)
-aim  = (x, y)
-fire = true/false
-super = true/false
-```
-
-That representation is suitable for testing twin-stick-style action-game agents without hard-coding three buttons or a three-lane world model.
-
-## Legacy prototype
-
-The earlier .NET synthetic-arena prototype remains under `src/FPSSC/` for now as a reference implementation of the same capture → vision → policy → command separation. The Android implementation is the active direction.
-## Development and validation
-
-Use **JDK 17**, **Gradle 8.9**, and Android SDK 35. From the repository root:
+Requirements: JDK 17, Gradle 8.9, Android SDK 35; .NET SDK 8 for the C# reference.
 
 ```sh
-# Compile the Android app and run Android lint.
-gradle -p android assembleDebug lintDebug
-
-# Run the real Android perception/policy core with small JVM bitmap fixtures.
 bash scripts/test-core.sh
-
-# Build and check the .NET reference implementation (requires .NET SDK 8).
+gradle -p android assembleDebug lintDebug
 dotnet run --project tests/FPSSC.Tests --configuration Release
-
-# Start the .NET demo; Ctrl+C stops it.
-dotnet run --project src/FPSSC
 ```
 
-GitHub Actions runs both regression suites and Android build/lint on pushes and
-pull requests. The JVM fixtures exercise the production `AgentCore` but do not
-emulate Android services or MediaProjection. They are compiled separately and are
-never packaged into the app.
+For the optional local regression against the supplied practice screenshot:
 
-Capture lifecycle and device checks:
+```sh
+bash scripts/test-core.sh /path/to/practice-screenshot.jpg
+```
 
-- Start capture, accept consent, and confirm the ongoing capture notification.
-- Press Start again during capture: the existing session should continue.
-- Stop from the app or Android's screen-sharing controls: capture should end.
-- Start again after stopping: tracking and latency estimates should start fresh.
-- Test a device with padded image rows; conversion must handle a final row
-  without trailing padding.
+The image is not stored in the repository. This scene-specific regression checks
+player/enemy recognition, no moving shots in the static scene, movement/fire
+output and automatic movement/attack-button centers at production analysis size.
+Synthetic tests cover relocated/scaled control artwork, red attack, false super,
+missing buttons, temporal stability, occlusion expiry and scene/resize reset.
+JVM Bitmap/Color fixtures are test-only and are never packaged into the APK.
+GitHub Actions runs regression suites, Android build/lint and APK upload.
 
-The current capture surface uses its initial dimensions. Rotation and Android 14+
-app-only capture resizing still need device-specific validation and dynamic
-surface resizing. Stop and restart capture after changing the capture size.
-The baseline color detector also needs calibration for each test application.
+## Current limits
 
-## Experimental Android automatic control
+This is still experimental, not a device-validated autonomous player. The supplied
+static practice screenshot is recognized; real touch behavior, movement sequences,
+skins/maps, effects and HUD occlusions still need device/sequence testing.
 
-1. Install the debug APK from a successful **Validate** Actions run (`FPSSC-debug-apk`).
-2. Open FPSSC in landscape. Enable the FPSSC service in Android Accessibility settings.
-3. Set the movement and attack joystick centers using fractions of the **full screen**:
-   `x / screen width`, `y / screen height`. Set drag radius as a fraction of screen height.
-   The suggested values are placeholders; save your actual layout.
-4. Start capture and choose **entire screen**, not a single app. Turn automatic control ON.
-5. Switch to Brawl Stars (`com.supercell.brawlstars`). Use a practice session to verify
-   recognition and coordinates before relying on the output.
-6. Stop using the notification's **停止** action, Android screen-sharing controls,
-   or return to FPSSC and switch automatic control OFF.
+- The control locator expects visible blue/cyan movement and orange/red attack
+  artwork in the lower-left/lower-right parts of a landscape display. It does not
+  support arbitrary custom controls placed anywhere, invisible buttons or every
+  theme. Undetected controls do not fall back to preset coordinates.
+- Health bars anchor character positions; low/hidden HP bars may be missed.
+- Input consists of 90 ms two-finger pulses, not validated continuous twin-stick
+  control. Android gesture cancellation disables automatic control.
+- Menus, matchmaking, ammo management, character-specific tactics and dynamic
+  capture resizing are not implemented. Restart capture after rotating/resizing.
+- `queueExtra` estimates relative source queue growth. It does not measure unknown
+  constant capture latency or subtract unrelated absolute clock epochs.
 
-Commands are gated to the foreground Brawl Stars package, landscape full-display
-capture matching the display dimensions, and a maximum command age of 200 ms.
-Input uses 90 ms gestures with at most one movement and one attack stroke; it is
-an initial pulsed-control backend, not continuous twin-stick control. The service
-reads window package changes and does not request UI-tree contents. Gesture
-interruption disables automatic control; each capture teardown also disables it.
-The detector is still a color baseline and is not trained for Brawl Stars skins,
-maps, effects, menus, or match transitions. Menu navigation, matchmaking, ammo
-management, and validated character-specific tactics are not implemented.
-
-### Implementation references
-
-- [scrcpy Controller](https://github.com/Genymobile/scrcpy/blob/master/server/src/main/java/com/genymobile/scrcpy/control/Controller.java): reviewed its separate control path and position/device handling. Its shell-level input backend is not directly usable by a normal Android application.
-- [DXcam](https://github.com/ra1nty/DXcam): reviewed timestamped latest-frame processing and bounded buffering; FPSSC discards stale commands instead of building an input backlog.
-- [Android AccessibilityService](https://developer.android.com/reference/android/accessibilityservice/AccessibilityService): Android's public gesture dispatch API is used for the optional backend.
-
-These are design references, not vendored code or claims of equivalent functionality.
-
-## Screenshot-driven recognition fix
-
-Android capture now uses a HUD-only health-bar detector (colored fill, horizontal
-shape, nearby white HP text and dark border). The synthetic color-player fallback
-is disabled for live capture. This was checked against a supplied 1536×688 practice
-screenshot resized to the production 640 px analysis width: player near (0.479,
-0.494), four robot enemies, no moving projectile tracks, and a nonzero movement /
-fire decision after repeated observations. The image is not included in this public
-repository. Run `bash scripts/test-core.sh /path/to/practice-screenshot.jpg` to
-reproduce that optional scene-specific regression. The fixture expects this scene,
-not arbitrary screenshots.
-
-The **提供画像のブロスタ配置を入力** button fills the movement and attack centers
-from that screenshot. Then press **操作位置を保存**. It does not overwrite a saved
-layout automatically. Different layouts still require calibration.
-
-`queueExtra` measures relative queue growth from differences between successive
-source timestamps and receipt timestamps. It deliberately does not subtract their
-absolute epochs or claim to measure absolute capture latency. A constant capture
-pipeline delay is not observable this way. Duplicate / invalid timestamps suppress
-input. Diagnostics now include the specific reason input was withheld.
-
-This verifies one static scene, not match performance. HUD occlusion, very low HP,
-other skins / maps, and moving projectiles still need recorded-sequence validation.
+The .NET synthetic-arena reference remains under `src/FPSSC`; start it with
+`dotnet run --project src/FPSSC` and stop with Ctrl+C.

@@ -41,6 +41,7 @@ public final class AgentService extends Service {
     static volatile long statusTime;
     private AgentCore core;
     private FrameTiming frameTiming;
+    private ControlLocator controlLocator;
     private MediaProjection.Callback projectionCallback;
 
     private HandlerThread captureThread;
@@ -104,6 +105,7 @@ public final class AgentService extends Service {
         statusTime = SystemClock.elapsedRealtime();
         core = new AgentCore(true);
         frameTiming = new FrameTiming();
+        controlLocator = new ControlLocator();
         frameCount = 0;
         droppedFrames = 0;
 
@@ -162,6 +164,7 @@ public final class AgentService extends Service {
         try {
             long imageAgeMs = frameTiming.observe(image.getTimestamp(), callbackAt);
             if (imageAgeMs < 0) {
+                controlLocator.clear();
                 status = "画像の時刻が無効または重複しています。操作を保留中";
                 return;
             }
@@ -179,7 +182,8 @@ public final class AgentService extends Service {
 
             long visionStart = SystemClock.elapsedRealtime();
             AgentCore.ControlCommand command = core.analyze(scaled, visionStart, imageAgeMs);
-            TouchService.submit(command, callbackAt - imageAgeMs, width, height);
+            ControlLocator.Layout layout = controlLocator.update(scaled, visionStart, core.hasObservedPlayer());
+            TouchService.submit(command, layout == null ? null : layout.profile(), callbackAt - imageAgeMs, width, height);
             long end = SystemClock.elapsedRealtime();
             long visionMs = end - visionStart;
             long totalMs = end - callbackAt;
@@ -188,6 +192,8 @@ public final class AgentService extends Service {
             status = "解析中 · frame " + frameCount + "\n" + command.reason()
                     + "\n移動 " + command.move() + "\n照準 " + command.aim()
                     + "\n射撃 " + command.fire() + "\n" + core.telemetry()
+                    + "\n" + controlLocator.status()
+                    + (layout == null ? "" : "\n" + layout.profile())
                     + "\n処理時間 " + totalMs + " ms";
             statusTime = SystemClock.elapsedRealtime();
 
@@ -256,7 +262,7 @@ public final class AgentService extends Service {
 
     private Notification notification(String text) {
         return new Notification.Builder(this, CHANNEL)
-                .setSmallIcon(android.R.drawable.ic_media_play)
+                .setSmallIcon(com.tanuki276.fpssc.R.drawable.ic_stat_agent)
                 .setContentIntent(android.app.PendingIntent.getActivity(this, 0,
                         new Intent(this, MainActivity.class), android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT))
                 .addAction(new Notification.Action.Builder(android.R.drawable.ic_media_pause, "停止",

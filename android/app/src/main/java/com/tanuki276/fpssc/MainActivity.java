@@ -35,17 +35,17 @@ public final class MainActivity extends Activity {
         root.setPadding(pad, pad, pad, pad);
 
         TextView title = new TextView(this);
-        title.setText("FPSSC Android\nreal-time vision + policy research harness");
+        title.setText("FPSSC " + BuildConfig.VERSION_NAME + "\n操作位置を自動認識");
         title.setTextSize(22f);
         root.addView(title);
 
         TextView body = new TextView(this);
-        body.setText("横画面で操作位置を設定し、画面共有は全画面を選択してください。自動操作はブロスタが前面のときだけ送信します。通知の「停止」で終了できます。");
+        body.setText("横画面で全画面共有を開始すると、操作ボタンの位置を自動認識します。自動操作はブロスタが前面のときだけ送信します。通知の「停止」で終了できます。");
         body.setPadding(0, 28, 0, 28);
         root.addView(body);
 
         Button start = new Button(this);
-        start.setText("Start capture");
+        start.setText("画面共有を開始");
         start.setOnClickListener(v -> {
             MediaProjectionManager m = getSystemService(MediaProjectionManager.class);
             startActivityForResult(m.createScreenCaptureIntent(), REQ_CAPTURE);
@@ -53,7 +53,7 @@ public final class MainActivity extends Activity {
         root.addView(start);
 
         Button stop = new Button(this);
-        stop.setText("Stop");
+        stop.setText("停止");
         stop.setOnClickListener(v -> stopService(new Intent(this, AgentService.class)));
         root.addView(stop);
 
@@ -61,52 +61,15 @@ public final class MainActivity extends Activity {
         accessibility.setText("操作サービスを有効にする（Android 設定）");
         accessibility.setOnClickListener(v -> startActivity(new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)));
         root.addView(accessibility);
-        android.content.SharedPreferences preferences = getSharedPreferences("controls", MODE_PRIVATE);
-        String[] keys = {"moveX", "moveY", "attackX", "attackY", "radius"};
-        String[] labels = {"移動中心 X (0–1)", "移動中心 Y (0–1)", "攻撃中心 X (0–1)", "攻撃中心 Y (0–1)", "ドラッグ半径 / 画面高さ (0.01–0.15)"};
-        float[] defaults = {.15f, .8f, .88f, .75f, .06f};
-        android.widget.EditText[] fields = new android.widget.EditText[keys.length];
-        for (int i = 0; i < keys.length; i++) {
-            TextView label = new TextView(this);
-            label.setText(labels[i]);
-            root.addView(label);
-            fields[i] = new android.widget.EditText(this);
-            fields[i].setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
-            fields[i].setText(Float.toString(preferences.getFloat(keys[i], defaults[i])));
-            root.addView(fields[i]);
-        }
-        Button preset = new Button(this);
-        preset.setText("提供画像のブロスタ配置を入力");
-        preset.setOnClickListener(v -> {
-            TouchService.arm(false);
-            float[] values = {.15f, .76f, .84f, .61f, .06f};
-            for (int i = 0; i < values.length; i++) fields[i].setText(Float.toString(values[i]));
-            android.widget.Toast.makeText(this, "配置を入力しました。「操作位置を保存」を押してください", android.widget.Toast.LENGTH_LONG).show();
-        });
-        root.addView(preset);
-        Button save = new Button(this);
-        save.setText("操作位置を保存（実際の配置に合わせてください）");
-        save.setOnClickListener(v -> {
-            TouchService.arm(false);
-            try {
-                float[] values = new float[5];
-                for (int i = 0; i < 5; i++) values[i] = Float.parseFloat(fields[i].getText().toString());
-                new TouchProfile(values[0], values[1], values[2], values[3], values[4]);
-                android.content.SharedPreferences.Editor editor = preferences.edit();
-                for (int i = 0; i < 5; i++) editor.putFloat(keys[i], values[i]);
-                editor.putBoolean("calibrated", true).apply();
-                android.widget.Toast.makeText(this, "保存しました", android.widget.Toast.LENGTH_SHORT).show();
-            } catch (IllegalArgumentException e) {
-                android.widget.Toast.makeText(this, "位置は 0–1、半径は 0.01–0.15 で指定してください", android.widget.Toast.LENGTH_LONG).show();
-            }
-        });
-        root.addView(save);
+        TextView automaticHelp = new TextView(this);
+        automaticHelp.setText("数値入力や保存は不要です。対戦画面の移動・攻撃ボタンが見えると位置を自動認識します。見つからない場合は診断欄に理由が出ます。");
+        root.addView(automaticHelp);
         automatic = new android.widget.Switch(this);
         automatic.setText("自動操作 ON / OFF");
         automatic.setOnCheckedChangeListener((button, enabled) -> {
-            if (enabled && (!TouchService.connected() || !preferences.getBoolean("calibrated", false))) {
+            if (enabled && !TouchService.connected()) {
                 automatic.setChecked(false);
-                android.widget.Toast.makeText(this, "操作サービスの有効化と操作位置の保存が必要です", android.widget.Toast.LENGTH_LONG).show();
+                android.widget.Toast.makeText(this, "Android 設定で FPSSC の操作サービスを有効にしてください", android.widget.Toast.LENGTH_LONG).show();
                 return;
             }
             TouchService.arm(enabled);

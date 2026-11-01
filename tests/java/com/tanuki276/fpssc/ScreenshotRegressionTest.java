@@ -13,6 +13,14 @@ public final class ScreenshotRegressionTest {
             frame.setPixel(x, y, image.getRGB(Math.min(image.getWidth()-1, (int)((x+.5f)*image.getWidth()/w)),
                     Math.min(image.getHeight()-1, (int)((y+.5f)*image.getHeight()/h))));
         }
+        ControlLocator locator = new ControlLocator();
+        var layout = locator.detect(frame);
+        System.out.println("automatic layout=" + layout);
+        if (layout == null || Math.abs(layout.profile().moveX() - .149f) > .025f
+                || Math.abs(layout.profile().moveY() - .753f) > .035f
+                || Math.abs(layout.profile().attackX() - .84f) > .025f
+                || Math.abs(layout.profile().attackY() - .61f) > .04f)
+            throw new AssertionError("Control centers not detected");
         AgentCore core = new AgentCore(true);
         System.out.println(core.analyze(frame, 1000));
         System.out.println(core.analyze(frame, 1033));
@@ -26,7 +34,7 @@ public final class ScreenshotRegressionTest {
         if (command.move().len() < .1f || !command.fire()) throw new AssertionError("No movement/fire decision");
         if (new AgentCore.VisionPipeline(true).detect(new Bitmap(640, 287), 1000, 0).player() != null)
             throw new AssertionError("Blank game frame must not invent a player");
-        System.out.println("Screenshot: 5 regression checks passed");
+        System.out.println("Screenshot: 6 regression checks passed");
         System.out.println("player=" + state.player());
         System.out.println("enemies=" + state.enemies());
         System.out.println("projectiles=" + state.projectiles());

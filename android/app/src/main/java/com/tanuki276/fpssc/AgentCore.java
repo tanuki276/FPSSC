@@ -87,6 +87,11 @@ final class AgentCore {
         pipelineLatencyEwmaMs = pipelineLatencyEwmaMs * 0.86f + elapsedMs * 0.14f;
     }
 
+    boolean hasObservedPlayer() {
+        WorldState s = lastState;
+        return s != null && s.player() != null && s.player().observed() && s.player().confidence() >= .38f;
+    }
+
     String telemetry() {
         WorldState s = lastState;
         if (s == null) return "state=none";
