@@ -1,86 +1,92 @@
 # FPSSC
 
-**FPSSC** is a Windows-oriented real-time game-automation research framework inspired by the capture → vision → decision → input architecture used in COSC.
+FPSSC is now primarily an **Android real-time game-vision research harness** inspired by the architecture of COSC and by public Windows Brawl Stars automation projects that separate perception, tracking, tactical decisions, and controls.
 
-This repository is intentionally designed for **offline experiments, synthetic arenas, recorded footage, and software you own/control**. It does not include live-game input injection, anti-cheat bypasses, or code intended to automate competitive online matches.
+The Android implementation lives under `android/`.
 
-## What is included
-
-- A low-allocation frame buffer
-- A simple color/blob vision pipeline
-- Player / enemy / projectile tracking primitives
-- A tactical policy that can aim, approach, retreat, and dodge
-- A synthetic arena used as an end-to-end test target
-- Timing diagnostics for capture, vision, policy, and total loop latency
-- Clean interfaces for future Windows capture backends and safe test input sinks
-
-## Architecture
+## Android architecture
 
 ```text
-Frame source
-   ↓
-Pixel frame
-   ↓
-Vision / detection
-   ↓
-World state
-   ↓
-Policy
-   ↓
-Control command
-   ↓
-Safe input sink / simulator
+MediaProjection
+    ↓
+ImageReader / latest frame
+    ↓
+VisionPipeline
+    ↓
+WorldState
+  ├─ player
+  ├─ enemies
+  └─ projectiles
+    ↓
+TacticalPolicy
+  ├─ approach
+  ├─ kite
+  ├─ projectile dodge
+  └─ predicted aim
+    ↓
+ControlCommand
+  ├─ move vector
+  ├─ aim vector
+  ├─ fire
+  └─ super
+    ↓
+preview/log sink
 ```
 
-The important split is between generic runtime code and game-specific perception/policy code:
+The current Android prototype deliberately stops at `ControlCommand`: it does not contain live-game system-wide touch injection, anti-cheat bypasses, or code intended to automate competitive online matches. This makes the perception and policy layers usable with recorded footage, test applications, synthetic arenas, or software you own/control.
 
-```text
-FPSSC.Core
-├─ IFrameSource
-├─ IVisionPipeline
-├─ IPolicy
-├─ IInputSink
-└─ AgentLoop
+## Why this structure
 
-Demo
-├─ SyntheticArena
-├─ SyntheticVision
-└─ ArenaPolicy
-```
+Public Windows projects commonly split the system into roughly the same pieces:
 
-## Requirements
+- screen capture / emulator integration
+- object detection (often YOLO/OpenCV)
+- tracking and state extraction
+- tactical logic such as movement, aiming and dodging
+- a separate control backend
 
-- .NET 8 SDK
-- Windows, Linux, or macOS for the synthetic demo
+FPSSC maps those layers onto Android instead of copying a Windows emulator input backend:
 
-The core is written in plain C# without external packages so the demo stays easy to inspect and benchmark.
+- Windows capture → Android `MediaProjection`
+- desktop detector → `VisionPipeline`
+- tactical module → `TacticalPolicy`
+- mouse/keyboard/emulator controller → `ControlCommand` abstraction
 
-## Run
+This is also a natural extension of COSC, whose strongest reusable part is its fast capture → analyze → decide loop.
 
-```powershell
-dotnet run --project src/FPSSC/FPSSC.csproj
-```
+## Current Android prototype
 
-You should see periodic telemetry similar to:
+`android/app/src/main/java/com/tanuki276/fpssc/`
 
-```text
-tick=240 hp=5 score=8 capture=0.2ms vision=0.5ms policy=0.1ms total=1.0ms
-```
+- `MainActivity.java` — requests screen-capture permission
+- `AgentService.java` — foreground MediaProjection capture loop, latest-frame processing, telemetry
+- `AgentCore.java` — normalized coordinates, lightweight color/blob baseline detector, velocity estimation, projectile dodge, predicted aim, range management
 
-## Safety boundary
+The detector is intentionally a simple baseline. For more serious experiments, replace `VisionPipeline` with an ONNX/TFLite detector or a purpose-built OpenCV pipeline while leaving the rest of the agent unchanged.
 
-FPSSC deliberately does **not** ship a system-wide `SendInput` implementation or a backend targeting a named commercial game. If you extend it, keep testing inside a simulator, replay viewer, accessibility prototype, or your own application.
+## Build
 
-## Roadmap
+Open the `android/` directory in Android Studio, or use a local Gradle installation compatible with Android Gradle Plugin 8.7.x.
 
-- Recorded-frame / video replay source
-- Windows Graphics Capture source for read-only benchmarking
-- Better multi-object tracking
-- Kalman-style velocity estimation
-- Configurable regions of interest
-- Debug overlay and frame dumps
-- Benchmark suite and regression tests
+Requirements:
+
+- Android SDK 35
+- Java 17
+- Android 8.0+ (`minSdk 26`)
 
 ## Relationship to COSC
 
-COSC proved that a small controller can get strong results from a fast loop and game-specific perception. FPSSC keeps that useful architecture but separates it into reusable interfaces so more complex 2D action-game experiments can be developed without hard-coding one title's controls or UI.
+COSC is specialized for a small discrete action space. FPSSC generalizes the decision output to 2D vectors:
+
+```text
+move = (x, y)
+aim  = (x, y)
+fire = true/false
+super = true/false
+```
+
+That representation is suitable for testing twin-stick-style action-game agents without hard-coding three buttons or a three-lane world model.
+
+## Legacy prototype
+
+The earlier .NET synthetic-arena prototype remains under `src/FPSSC/` for now as a reference implementation of the same capture → vision → policy → command separation. The Android implementation is the active direction.
