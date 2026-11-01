@@ -110,8 +110,15 @@ public final class AgentService extends Service {
 
         Bitmap frame = null;
         Bitmap scaled = null;
-        long captureAt = SystemClock.elapsedRealtime();
+        long callbackAt = SystemClock.elapsedRealtime();
         try {
+            long imageTimestampNs = image.getTimestamp();
+            long imageAgeMs = 0;
+            if (imageTimestampNs > 0) {
+                long nowNs = SystemClock.elapsedRealtimeNanos();
+                imageAgeMs = Math.max(0L, Math.min(500L, (nowNs - imageTimestampNs) / 1_000_000L));
+            }
+
             long convertStart = SystemClock.elapsedRealtime();
             frame = imageToBitmap(image);
             if (frame == null) return;
@@ -124,8 +131,11 @@ public final class AgentService extends Service {
             long convertEnd = SystemClock.elapsedRealtime();
 
             long visionStart = SystemClock.elapsedRealtime();
-            AgentCore.ControlCommand command = core.analyze(scaled, visionStart);
+            AgentCore.ControlCommand command = core.analyze(scaled, visionStart, imageAgeMs);
             long end = SystemClock.elapsedRealtime();
+            long visionMs = end - visionStart;
+            long totalMs = end - callbackAt;
+            core.observePipelineLatency(totalMs);
             frameCount++;
 
             // Preview-only: no system-wide touch injection is performed here.
@@ -134,16 +144,18 @@ public final class AgentService extends Service {
                     + " aim=" + command.aim()
                     + " fire=" + command.fire()
                     + " reason=" + command.reason()
+                    + " imageAgeMs=" + imageAgeMs
                     + " convertMs=" + (convertEnd - convertStart)
-                    + " visionMs=" + (end - visionStart)
-                    + " totalMs=" + (end - captureAt)
+                    + " visionMs=" + visionMs
+                    + " totalMs=" + totalMs
                     + " dropped=" + droppedFrames
-                    + " size=" + scaled.getWidth() + "x" + scaled.getHeight());
+                    + " size=" + scaled.getWidth() + "x" + scaled.getHeight()
+                    + " " + core.telemetry());
 
             if (frameCount % 8 == 0) {
                 getSystemService(NotificationManager.class).notify(
                         NOTIFICATION_ID,
-                        notification(command.reason() + " · vision " + (end - visionStart) + "ms"));
+                        notification(command.reason() + " · " + core.telemetry()));
             }
         } catch (Throwable t) {
             Log.e("FPSSC", "frame failed", t);
