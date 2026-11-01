@@ -12,6 +12,16 @@ import android.widget.TextView;
 
 public final class MainActivity extends Activity {
     private static final int REQ_CAPTURE = 276;
+    private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
+    private TextView statusView;
+    private final Runnable refresh = new Runnable() {
+        @Override public void run() {
+            statusView.setText(AgentService.status);
+            ui.postDelayed(this, 500);
+        }
+    };
+    @Override protected void onResume() { super.onResume(); ui.post(refresh); }
+    @Override protected void onPause() { ui.removeCallbacks(refresh); super.onPause(); }
 
     @Override
     protected void onCreate(Bundle state) {
@@ -19,7 +29,8 @@ public final class MainActivity extends Activity {
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(48, 64, 48, 48);
+        int pad = Math.round(20 * getResources().getDisplayMetrics().density);
+        root.setPadding(pad, pad, pad, pad);
 
         TextView title = new TextView(this);
         title.setText("FPSSC Android\nreal-time vision + policy research harness");
@@ -44,7 +55,18 @@ public final class MainActivity extends Activity {
         stop.setOnClickListener(v -> stopService(new Intent(this, AgentService.class)));
         root.addView(stop);
 
-        setContentView(root);
+        statusView = new TextView(this);
+        statusView.setTextIsSelectable(true);
+        statusView.setPadding(0, 24, 0, 24);
+        root.addView(statusView);
+        Button share = new Button(this);
+        share.setText("診断結果を共有");
+        share.setOnClickListener(v -> startActivity(Intent.createChooser(new Intent(Intent.ACTION_SEND)
+                .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "FPSSC diagnostics\n" + AgentService.status), "診断結果を共有")));
+        root.addView(share);
+        android.widget.ScrollView scroll = new android.widget.ScrollView(this);
+        scroll.addView(root);
+        setContentView(scroll);
         if (android.os.Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 277);

@@ -37,6 +37,8 @@ public final class AgentService extends Service {
     private static final int ANALYSIS_WIDTH = 640;
 
     private final AtomicBoolean processing = new AtomicBoolean(false);
+    static volatile String status = "停止中";
+    static volatile long statusTime;
     private AgentCore core;
     private MediaProjection.Callback projectionCallback;
 
@@ -92,6 +94,8 @@ public final class AgentService extends Service {
     }
 
     private void startCapture(int resultCode, Intent resultData) {
+        status = "画面を取得しています…";
+        statusTime = SystemClock.elapsedRealtime();
         core = new AgentCore();
         frameCount = 0;
         droppedFrames = 0;
@@ -173,6 +177,11 @@ public final class AgentService extends Service {
             long totalMs = end - callbackAt;
             core.observePipelineLatency(totalMs);
             frameCount++;
+            status = "解析中 · frame " + frameCount + "\n" + command.reason()
+                    + "\n移動 " + command.move() + "\n照準 " + command.aim()
+                    + "\n射撃 " + command.fire() + "\n" + core.telemetry()
+                    + "\n処理時間 " + totalMs + " ms";
+            statusTime = SystemClock.elapsedRealtime();
 
             // Preview-only: no system-wide touch injection is performed here.
             Log.i("FPSSC", "frame=" + frameCount
@@ -195,6 +204,7 @@ public final class AgentService extends Service {
                         notification(command.reason() + " · " + core.telemetry()));
             }
         } catch (RuntimeException t) {
+            status = "解析エラー: " + t.getClass().getSimpleName();
             Log.e("FPSSC", "frame failed", t);
         } finally {
             if (scaled != null && scaled != frame) scaled.recycle();
@@ -264,6 +274,7 @@ public final class AgentService extends Service {
         projection = null;
         projectionCallback = null;
         core = null;
+        status = "停止中";
         if (oldReader != null) release("image listener", () -> oldReader.setOnImageAvailableListener(null, null));
         if (oldDisplay != null) release("virtual display", oldDisplay::release);
         if (oldReader != null) release("image reader", oldReader::close);
