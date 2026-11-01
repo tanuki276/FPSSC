@@ -5,6 +5,7 @@ import android.graphics.Color;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -80,7 +81,7 @@ final class AgentCore {
     }
 
     void observePipelineLatency(float elapsedMs) {
-        if (elapsedMs < 0f || elapsedMs > 500f) return;
+        if (!Float.isFinite(elapsedMs) || elapsedMs < 0f || elapsedMs > 500f) return;
         pipelineLatencyEwmaMs = pipelineLatencyEwmaMs * 0.86f + elapsedMs * 0.14f;
     }
 
@@ -95,17 +96,34 @@ final class AgentCore {
     }
 
     static final class VisionPipeline {
-        private final TrackManager playerTracks = new TrackManager(Kind.PLAYER, 0.12f, 2);
-        private final TrackManager enemyTracks = new TrackManager(Kind.ENEMY, 0.17f, 4);
-        private final TrackManager projectileTracks = new TrackManager(Kind.PROJECTILE, 0.20f, 3);
-        private final GlobalMotionEstimator globalMotion = new GlobalMotionEstimator();
+        private TrackManager playerTracks = new TrackManager(Kind.PLAYER, 0.12f, 2);
+        private TrackManager enemyTracks = new TrackManager(Kind.ENEMY, 0.17f, 4);
+        private TrackManager projectileTracks = new TrackManager(Kind.PROJECTILE, 0.20f, 3);
+        private GlobalMotionEstimator globalMotion = new GlobalMotionEstimator();
         private long previousFrameMs;
+        private int previousWidth;
+        private int previousHeight;
+
+        private void reset() {
+            playerTracks = new TrackManager(Kind.PLAYER, 0.12f, 2);
+            enemyTracks = new TrackManager(Kind.ENEMY, 0.17f, 4);
+            projectileTracks = new TrackManager(Kind.PROJECTILE, 0.20f, 3);
+            globalMotion = new GlobalMotionEstimator();
+            previousFrameMs = 0;
+        }
 
         WorldState detect(Bitmap b, long nowMs, float captureAgeMs) {
             if (b == null || b.getWidth() < 96 || b.getHeight() < 96) {
-                return new WorldState(null, List.of(), List.of(), nowMs, captureAgeMs, new Vec2(0, 0), 0f);
+                reset();
+                return new WorldState(null, Collections.emptyList(), Collections.emptyList(), nowMs, 0f, new Vec2(0, 0), 0f);
             }
 
+            if (b.getWidth() != previousWidth || b.getHeight() != previousHeight
+                    || nowMs <= previousFrameMs || nowMs - previousFrameMs > 500L) {
+                reset();
+            }
+            previousWidth = b.getWidth();
+            previousHeight = b.getHeight();
             float dt = previousFrameMs == 0
                     ? 1f / 30f
                     : clamp((nowMs - previousFrameMs) / 1000f, 1f / 120f, 0.20f);
@@ -611,10 +629,11 @@ final class AgentCore {
         private static final float PROJECTILE_SPEED = 1.75f;
         private Vec2 previousAim = new Vec2(0, 0);
         private int stableAimFrames;
+        private int targetId = -1;
 
         ControlCommand decide(WorldState s, float pipelineLatencyMs) {
             Track p = s.player();
-            if (p == null || p.confidence() < 0.38f) {
+            if (p == null || !p.observed() || p.confidence() < 0.38f) {
                 stableAimFrames = 0;
                 return ControlCommand.idle("player uncertain");
             }
@@ -640,6 +659,11 @@ final class AgentCore {
                 return ControlCommand.idle("no stable target");
             }
 
+            if (targetId != enemy.id()) {
+                targetId = enemy.id();
+                stableAimFrames = 0;
+                previousAim = new Vec2(0, 0);
+            }
             Vec2 enemyNow = enemy.project(lagSec);
             Vec2 toEnemy = enemyNow.sub(playerNow);
             float distance = toEnemy.len();
@@ -657,7 +681,7 @@ final class AgentCore {
             else stableAimFrames = Math.max(0, stableAimFrames - 1);
             previousAim = aim;
 
-            boolean reliableTrack = enemy.confidence() >= 0.52f && enemy.ageFrames() >= 2;
+            boolean reliableTrack = enemy.observed() && enemy.confidence() >= 0.52f && enemy.ageFrames() >= 2;
             boolean stableAim = stableAimFrames >= 2 || distance < 0.18f;
             boolean fire = reliableTrack && stableAim && distance <= 0.50f;
 
@@ -728,7 +752,9 @@ final class AgentCore {
                         .add(shot.acceleration().sub(player.acceleration()).mul(0.5f * t * t));
                 float miss = missVec.len();
                 boolean approaching = r.dot(v) < 0f;
-                if (!approaching) continue;
+                // A fast approaching shot can still pass far outside the collision envelope.
+                float collisionRadius = Math.max(0.035f, player.radius() + shot.radius() + 0.025f);
+                if (!approaching || miss > collisionRadius) continue;
 
                 float timeScore = 1f - clamp(t / 0.52f, 0f, 1f);
                 float missScore = 1f - clamp(miss / 0.155f, 0f, 1f);

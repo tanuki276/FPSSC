@@ -13,12 +13,22 @@ public sealed class PixelFrame
 
     public PixelFrame(int width, int height)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
         Width = width;
         Height = height;
-        Pixels = new Rgb[width * height];
+        Pixels = new Rgb[checked(width * height)];
     }
 
-    public ref Rgb this[int x, int y] => ref Pixels[y * Width + x];
+    public ref Rgb this[int x, int y]
+    {
+        get
+        {
+            if ((uint)x >= (uint)Width) throw new ArgumentOutOfRangeException(nameof(x));
+            if ((uint)y >= (uint)Height) throw new ArgumentOutOfRangeException(nameof(y));
+            return ref Pixels[y * Width + x];
+        }
+    }
     public void Clear(Rgb color) => Array.Fill(Pixels, color);
 }
 
@@ -197,7 +207,7 @@ public sealed class SyntheticVision : IVisionPipeline
         return count == 0 ? null : new Vector2(sx / (float)count, sy / (float)count);
     }
 
-    private static bool IsPlayer(Rgb c) => c.B > 180 && c.G > 120 && c.R < 120;
+    private static bool IsPlayer(Rgb c) => c.B > 180 && c.G > 120 && c.G < 210 && c.R < 120;
     private static bool IsEnemy(Rgb c) => c.R > 190 && c.G < 100 && c.B < 100;
     private static bool IsProjectile(Rgb c) => c.R > 210 && c.G > 180 && c.B < 100;
 }
@@ -214,7 +224,7 @@ public sealed class ArenaPolicy : IPolicy
 
         Vector2 toEnemy = target.Position - world.Player;
         float distance = MathF.Max(1f, toEnemy.Length());
-        Vector2 aim = Vector2.Normalize(toEnemy);
+        Vector2 aim = toEnemy.LengthSquared() > 1e-6f ? Vector2.Normalize(toEnemy) : Vector2.UnitX;
 
         Vector2 dodge = Vector2.Zero;
         foreach (Detection p in world.Projectiles)
@@ -271,6 +281,7 @@ public sealed class SyntheticArena : IFrameSource, IInputSink
 
     public ValueTask<PixelFrame> CaptureAsync(CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         Step(1f / 120f);
         Render();
         return ValueTask.FromResult(_frame);

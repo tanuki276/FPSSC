@@ -1,5 +1,8 @@
 package com.tanuki276.fpssc;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
+import android.app.Activity;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -34,7 +37,8 @@ public final class AgentService extends Service {
     private static final int ANALYSIS_WIDTH = 640;
 
     private final AtomicBoolean processing = new AtomicBoolean(false);
-    private final AgentCore core = new AgentCore();
+    private AgentCore core;
+    private MediaProjection.Callback projectionCallback;
 
     private HandlerThread captureThread;
     private Handler captureHandler;
@@ -50,35 +54,52 @@ public final class AgentService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        captureThread = new HandlerThread("fpssc-capture");
+        captureThread.start();
+        captureHandler = new Handler(captureThread.getLooper());
         NotificationChannel channel = new NotificationChannel(CHANNEL, "FPSSC agent", NotificationManager.IMPORTANCE_LOW);
         getSystemService(NotificationManager.class).createNotificationChannel(channel);
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent == null) return START_NOT_STICKY;
+        if (intent == null) {
+            stopSelf(startId);
+            return START_NOT_STICKY;
+        }
         int resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0);
         Intent resultData = android.os.Build.VERSION.SDK_INT >= 33
                 ? intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent.class)
                 : intent.getParcelableExtra(EXTRA_RESULT_DATA);
-        if (resultCode == 0 || resultData == null) return START_NOT_STICKY;
+        if (resultCode != Activity.RESULT_OK || resultData == null) {
+            stopSelf(startId);
+            return START_NOT_STICKY;
+        }
 
         startForeground(NOTIFICATION_ID, notification("starting capture"));
-        startCapture(resultCode, resultData);
+        captureHandler.post(() -> {
+            // A consent token must not be reused; repeated starts keep the active session.
+            if (projection != null) return;
+            try {
+                startCapture(resultCode, resultData);
+            } catch (RuntimeException e) {
+                Log.e("FPSSC", "capture setup failed", e);
+                stopCapture();
+                stopSelf(startId);
+            }
+        });
         return START_NOT_STICKY;
     }
 
     private void startCapture(int resultCode, Intent resultData) {
-        stopCapture();
+        core = new AgentCore();
+        frameCount = 0;
+        droppedFrames = 0;
 
         DisplayMetrics dm = getResources().getDisplayMetrics();
         width = dm.widthPixels;
         height = dm.heightPixels;
         densityDpi = dm.densityDpi;
-
-        captureThread = new HandlerThread("fpssc-capture", Thread.MAX_PRIORITY);
-        captureThread.start();
-        captureHandler = new Handler(captureThread.getLooper());
 
         MediaProjectionManager manager = getSystemService(MediaProjectionManager.class);
         projection = manager.getMediaProjection(resultCode, resultData);
@@ -87,9 +108,16 @@ public final class AgentService extends Service {
             return;
         }
 
-        projection.registerCallback(new MediaProjection.Callback() {
-            @Override public void onStop() { stopSelf(); }
-        }, captureHandler);
+        MediaProjection session = projection;
+        projectionCallback = new MediaProjection.Callback() {
+            @Override public void onStop() {
+                if (projection == session) {
+                    stopCapture();
+                    stopSelf();
+                }
+            }
+        };
+        projection.registerCallback(projectionCallback, captureHandler);
 
         reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);
         reader.setOnImageAvailableListener(this::onImage, captureHandler);
@@ -100,7 +128,15 @@ public final class AgentService extends Service {
     }
 
     private void onImage(ImageReader source) {
-        Image image = source.acquireLatestImage();
+        // Setup, callbacks, and cleanup all run on the capture thread.
+        if (source != reader) return;
+        Image image;
+        try {
+            image = source.acquireLatestImage();
+        } catch (IllegalStateException e) {
+            Log.w("FPSSC", "capture reader unavailable", e);
+            return;
+        }
         if (image == null) return;
         if (!processing.compareAndSet(false, true)) {
             droppedFrames++;
@@ -152,12 +188,13 @@ public final class AgentService extends Service {
                     + " size=" + scaled.getWidth() + "x" + scaled.getHeight()
                     + " " + core.telemetry());
 
-            if (frameCount % 8 == 0) {
+            if (frameCount % 8 == 0 && (android.os.Build.VERSION.SDK_INT < 33
+                    || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)) {
                 getSystemService(NotificationManager.class).notify(
                         NOTIFICATION_ID,
                         notification(command.reason() + " · " + core.telemetry()));
             }
-        } catch (Throwable t) {
+        } catch (RuntimeException t) {
             Log.e("FPSSC", "frame failed", t);
         } finally {
             if (scaled != null && scaled != frame) scaled.recycle();
@@ -174,15 +211,29 @@ public final class AgentService extends Service {
         ByteBuffer buffer = plane.getBuffer();
         int pixelStride = plane.getPixelStride();
         int rowStride = plane.getRowStride();
-        int padding = rowStride - pixelStride * image.getWidth();
-        int paddedWidth = image.getWidth() + padding / Math.max(1, pixelStride);
-
-        Bitmap padded = Bitmap.createBitmap(paddedWidth, image.getHeight(), Bitmap.Config.ARGB_8888);
-        padded.copyPixelsFromBuffer(buffer);
-        if (paddedWidth == image.getWidth()) return padded;
-        Bitmap cropped = Bitmap.createBitmap(padded, 0, 0, image.getWidth(), image.getHeight());
-        padded.recycle();
-        return cropped;
+        int imageWidth = image.getWidth();
+        int imageHeight = image.getHeight();
+        if (pixelStride != 4) throw new IllegalStateException("Unsupported RGBA pixel stride: " + pixelStride);
+        int rowBytes = Math.multiplyExact(imageWidth, pixelStride);
+        ByteBuffer packed = ByteBuffer.allocate(Math.multiplyExact(rowBytes, imageHeight));
+        int origin = buffer.position();
+        // The last row need not include padding; copy only actual image pixels.
+        for (int y = 0; y < imageHeight; y++) {
+            ByteBuffer row = buffer.duplicate();
+            int start = Math.addExact(origin, Math.multiplyExact(y, rowStride));
+            row.limit(Math.addExact(start, rowBytes));
+            row.position(start);
+            packed.put(row);
+        }
+        packed.flip();
+        Bitmap bitmap = Bitmap.createBitmap(imageWidth, imageHeight, Bitmap.Config.ARGB_8888);
+        try {
+            bitmap.copyPixelsFromBuffer(packed);
+            return bitmap;
+        } catch (RuntimeException e) {
+            bitmap.recycle();
+            throw e;
+        }
     }
 
     private Notification notification(String text) {
@@ -195,20 +246,43 @@ public final class AgentService extends Service {
                 .build();
     }
 
+    private static void release(String resource, Runnable action) {
+        try {
+            action.run();
+        } catch (RuntimeException e) {
+            Log.w("FPSSC", "Failed to release " + resource, e);
+        }
+    }
+
     private void stopCapture() {
-        try { if (reader != null) reader.close(); } catch (Throwable ignored) {}
-        try { if (display != null) display.release(); } catch (Throwable ignored) {}
-        try { if (projection != null) projection.stop(); } catch (Throwable ignored) {}
+        ImageReader oldReader = reader;
+        VirtualDisplay oldDisplay = display;
+        MediaProjection session = projection;
+        MediaProjection.Callback callback = projectionCallback;
         reader = null;
         display = null;
         projection = null;
-        if (captureThread != null) captureThread.quitSafely();
-        captureThread = null;
-        captureHandler = null;
+        projectionCallback = null;
+        core = null;
+        if (oldReader != null) release("image listener", () -> oldReader.setOnImageAvailableListener(null, null));
+        if (oldDisplay != null) release("virtual display", oldDisplay::release);
+        if (oldReader != null) release("image reader", oldReader::close);
+        if (session != null) {
+            if (callback != null) release("projection callback", () -> session.unregisterCallback(callback));
+            release("media projection", session::stop);
+        }
     }
 
     @Override public void onDestroy() {
-        stopCapture();
+        // Queue cleanup after any in-flight analysis, before terminating its looper.
+        HandlerThread thread = captureThread;
+        captureHandler.post(() -> {
+            try {
+                stopCapture();
+            } finally {
+                thread.quitSafely();
+            }
+        });
         stopForeground(STOP_FOREGROUND_REMOVE);
         super.onDestroy();
     }

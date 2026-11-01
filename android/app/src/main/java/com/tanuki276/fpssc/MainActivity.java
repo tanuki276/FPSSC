@@ -1,5 +1,7 @@
 package com.tanuki276.fpssc;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.app.Activity;
 import android.content.Intent;
 import android.media.projection.MediaProjectionManager;
@@ -43,6 +45,10 @@ public final class MainActivity extends Activity {
         root.addView(stop);
 
         setContentView(root);
+        if (android.os.Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 277);
+        }
     }
 
     @Override

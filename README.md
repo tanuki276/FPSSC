@@ -90,3 +90,39 @@ That representation is suitable for testing twin-stick-style action-game agents 
 ## Legacy prototype
 
 The earlier .NET synthetic-arena prototype remains under `src/FPSSC/` for now as a reference implementation of the same capture → vision → policy → command separation. The Android implementation is the active direction.
+## Development and validation
+
+Use **JDK 17**, **Gradle 8.9**, and Android SDK 35. From the repository root:
+
+```sh
+# Compile the Android app and run Android lint.
+gradle -p android assembleDebug lintDebug
+
+# Run the real Android perception/policy core with small JVM bitmap fixtures.
+bash scripts/test-core.sh
+
+# Build and check the .NET reference implementation (requires .NET SDK 8).
+dotnet run --project tests/FPSSC.Tests --configuration Release
+
+# Start the .NET demo; Ctrl+C stops it.
+dotnet run --project src/FPSSC
+```
+
+GitHub Actions runs both regression suites and Android build/lint on pushes and
+pull requests. The JVM fixtures exercise the production `AgentCore` but do not
+emulate Android services or MediaProjection. They are compiled separately and are
+never packaged into the app.
+
+Capture lifecycle and device checks:
+
+- Start capture, accept consent, and confirm the ongoing capture notification.
+- Press Start again during capture: the existing session should continue.
+- Stop from the app or Android's screen-sharing controls: capture should end.
+- Start again after stopping: tracking and latency estimates should start fresh.
+- Test a device with padded image rows; conversion must handle a final row
+  without trailing padding.
+
+The current capture surface uses its initial dimensions. Rotation and Android 14+
+app-only capture resizing still need device-specific validation and dynamic
+surface resizing. Stop and restart capture after changing the capture size.
+The baseline color detector also needs calibration for each test application.
