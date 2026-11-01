@@ -65,6 +65,11 @@ public final class AgentService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null && "stop".equals(intent.getAction())) {
+            TouchService.arm(false);
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         if (intent == null) {
             stopSelf(startId);
             return START_NOT_STICKY;
@@ -100,7 +105,8 @@ public final class AgentService extends Service {
         frameCount = 0;
         droppedFrames = 0;
 
-        DisplayMetrics dm = getResources().getDisplayMetrics();
+        DisplayMetrics dm = new DisplayMetrics();
+        getSystemService(android.view.WindowManager.class).getDefaultDisplay().getRealMetrics(dm);
         width = dm.widthPixels;
         height = dm.heightPixels;
         densityDpi = dm.densityDpi;
@@ -172,6 +178,7 @@ public final class AgentService extends Service {
 
             long visionStart = SystemClock.elapsedRealtime();
             AgentCore.ControlCommand command = core.analyze(scaled, visionStart, imageAgeMs);
+            TouchService.submit(command, callbackAt - imageAgeMs, width, height);
             long end = SystemClock.elapsedRealtime();
             long visionMs = end - visionStart;
             long totalMs = end - callbackAt;
@@ -249,6 +256,11 @@ public final class AgentService extends Service {
     private Notification notification(String text) {
         return new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_media_play)
+                .setContentIntent(android.app.PendingIntent.getActivity(this, 0,
+                        new Intent(this, MainActivity.class), android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT))
+                .addAction(new Notification.Action.Builder(android.R.drawable.ic_media_pause, "停止",
+                        android.app.PendingIntent.getService(this, 1, new Intent(this, AgentService.class).setAction("stop"),
+                                android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT)).build())
                 .setContentTitle("FPSSC Android")
                 .setContentText(text)
                 .setOnlyAlertOnce(true)
@@ -265,6 +277,7 @@ public final class AgentService extends Service {
     }
 
     private void stopCapture() {
+        TouchService.arm(false);
         ImageReader oldReader = reader;
         VirtualDisplay oldDisplay = display;
         MediaProjection session = projection;
@@ -285,6 +298,7 @@ public final class AgentService extends Service {
     }
 
     @Override public void onDestroy() {
+        TouchService.arm(false);
         // Queue cleanup after any in-flight analysis, before terminating its looper.
         HandlerThread thread = captureThread;
         captureHandler.post(() -> {
