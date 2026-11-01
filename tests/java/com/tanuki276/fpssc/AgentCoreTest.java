@@ -45,6 +45,15 @@ public final class AgentCoreTest {
         vision.detect(image, 2200, 0);
         vision.detect(null, 2233, 0);
         check(vision.detect(new Bitmap(240, 240), 2266, 0).player() == null, "invalid frame must clear stale tracks");
+        VisionPipeline hud = new VisionPipeline(true);
+        Bitmap hudImage = new Bitmap(640, 287);
+        for (int y = 110; y < 116; y++) for (int x = 294; x < 324; x++) hudImage.setPixel(x, y, 0xff50dc50);
+        for (int y = 105; y < 109; y++) for (int x = 300; x < 310; x++) hudImage.setPixel(x, y, 0xffffffff);
+        check(hud.detect(hudImage, 1000, 0).player() != null, "HP fill plus text must identify player");
+        Bitmap greenOnly = new Bitmap(640, 287);
+        for (int y = 110; y < 116; y++) for (int x = 294; x < 324; x++) greenOnly.setPixel(x, y, 0xff50dc50);
+        check(new VisionPipeline(true).detect(greenOnly, 1000, 0).player() == null, "Green scenery without HP text must not identify player");
+        check(new VisionPipeline(true).detect(image, 1000, 0).player() == null, "Game mode must not fall back to generic color player");
         System.out.println("AgentCore: " + checks + " regression checks passed");
     }
 }

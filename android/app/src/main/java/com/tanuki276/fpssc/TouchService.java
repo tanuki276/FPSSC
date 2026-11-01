@@ -59,7 +59,15 @@ public final class TouchService extends AccessibilityService {
     }
     private void apply(AgentCore.ControlCommand command, long frameTime, int width, int height) {
         long now = SystemClock.elapsedRealtime();
-        if (!armed || busy || !GAME.equals(foreground) || now - frameTime > 200 || now < frameTime) return;
+        if (!armed || busy) return;
+        if (!GAME.equals(foreground)) {
+            inputStatus = "待機: ブロスタが前面ではありません (" + foreground + ")";
+            return;
+        }
+        if (now - frameTime > 200 || now < frameTime) {
+            inputStatus = "操作保留: 判断が古い " + (now - frameTime) + " ms";
+            return;
+        }
         DisplayMetrics metrics = new DisplayMetrics();
         getSystemService(android.view.WindowManager.class).getDefaultDisplay().getRealMetrics(metrics);
         if (width <= height || width != metrics.widthPixels || height != metrics.heightPixels) {
@@ -77,7 +85,7 @@ public final class TouchService extends AccessibilityService {
         GestureDescription.Builder builder = new GestureDescription.Builder();
         boolean movement = command.move().len() > .01f;
         boolean fire = command.fire() && command.aim().len() > .01f;
-        if (!movement && !fire) return;
+        if (!movement && !fire) { inputStatus = "操作保留: " + command.reason(); return; }
         if (movement) builder.addStroke(stroke(profile.moveX(), profile.moveY(), command.move(), profile.radius(), width, height));
         if (fire) builder.addStroke(stroke(profile.attackX(), profile.attackY(), command.aim(), profile.radius(), width, height));
         busy = true;

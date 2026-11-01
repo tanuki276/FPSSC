@@ -75,6 +75,15 @@ public final class MainActivity extends Activity {
             fields[i].setText(Float.toString(preferences.getFloat(keys[i], defaults[i])));
             root.addView(fields[i]);
         }
+        Button preset = new Button(this);
+        preset.setText("提供画像のブロスタ配置を入力");
+        preset.setOnClickListener(v -> {
+            TouchService.arm(false);
+            float[] values = {.15f, .76f, .84f, .61f, .06f};
+            for (int i = 0; i < values.length; i++) fields[i].setText(Float.toString(values[i]));
+            android.widget.Toast.makeText(this, "配置を入力しました。「操作位置を保存」を押してください", android.widget.Toast.LENGTH_LONG).show();
+        });
+        root.addView(preset);
         Button save = new Button(this);
         save.setText("操作位置を保存（実際の配置に合わせてください）");
         save.setOnClickListener(v -> {
@@ -110,7 +119,7 @@ public final class MainActivity extends Activity {
         Button share = new Button(this);
         share.setText("診断結果を共有");
         share.setOnClickListener(v -> startActivity(Intent.createChooser(new Intent(Intent.ACTION_SEND)
-                .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "FPSSC diagnostics\n" + AgentService.status), "診断結果を共有")));
+                .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "FPSSC diagnostics\n" + AgentService.status + "\n" + TouchService.inputStatus), "診断結果を共有")));
         root.addView(share);
         android.widget.ScrollView scroll = new android.widget.ScrollView(this);
         scroll.addView(root);

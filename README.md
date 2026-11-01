@@ -157,3 +157,28 @@ management, and validated character-specific tactics are not implemented.
 - [Android AccessibilityService](https://developer.android.com/reference/android/accessibilityservice/AccessibilityService): Android's public gesture dispatch API is used for the optional backend.
 
 These are design references, not vendored code or claims of equivalent functionality.
+
+## Screenshot-driven recognition fix
+
+Android capture now uses a HUD-only health-bar detector (colored fill, horizontal
+shape, nearby white HP text and dark border). The synthetic color-player fallback
+is disabled for live capture. This was checked against a supplied 1536×688 practice
+screenshot resized to the production 640 px analysis width: player near (0.479,
+0.494), four robot enemies, no moving projectile tracks, and a nonzero movement /
+fire decision after repeated observations. The image is not included in this public
+repository. Run `bash scripts/test-core.sh /path/to/practice-screenshot.jpg` to
+reproduce that optional scene-specific regression. The fixture expects this scene,
+not arbitrary screenshots.
+
+The **提供画像のブロスタ配置を入力** button fills the movement and attack centers
+from that screenshot. Then press **操作位置を保存**. It does not overwrite a saved
+layout automatically. Different layouts still require calibration.
+
+`queueExtra` measures relative queue growth from differences between successive
+source timestamps and receipt timestamps. It deliberately does not subtract their
+absolute epochs or claim to measure absolute capture latency. A constant capture
+pipeline delay is not observable this way. Duplicate / invalid timestamps suppress
+input. Diagnostics now include the specific reason input was withheld.
+
+This verifies one static scene, not match performance. HUD occlusion, very low HP,
+other skins / maps, and moving projectiles still need recorded-sequence validation.

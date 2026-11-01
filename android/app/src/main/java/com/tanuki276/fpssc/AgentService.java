@@ -40,6 +40,7 @@ public final class AgentService extends Service {
     static volatile String status = "停止中";
     static volatile long statusTime;
     private AgentCore core;
+    private FrameTiming frameTiming;
     private MediaProjection.Callback projectionCallback;
 
     private HandlerThread captureThread;
@@ -101,7 +102,8 @@ public final class AgentService extends Service {
     private void startCapture(int resultCode, Intent resultData) {
         status = "画面を取得しています…";
         statusTime = SystemClock.elapsedRealtime();
-        core = new AgentCore();
+        core = new AgentCore(true);
+        frameTiming = new FrameTiming();
         frameCount = 0;
         droppedFrames = 0;
 
@@ -158,11 +160,10 @@ public final class AgentService extends Service {
         Bitmap scaled = null;
         long callbackAt = SystemClock.elapsedRealtime();
         try {
-            long imageTimestampNs = image.getTimestamp();
-            long imageAgeMs = 0;
-            if (imageTimestampNs > 0) {
-                long nowNs = SystemClock.elapsedRealtimeNanos();
-                imageAgeMs = Math.max(0L, Math.min(500L, (nowNs - imageTimestampNs) / 1_000_000L));
+            long imageAgeMs = frameTiming.observe(image.getTimestamp(), callbackAt);
+            if (imageAgeMs < 0) {
+                status = "画像の時刻が無効または重複しています。操作を保留中";
+                return;
             }
 
             long convertStart = SystemClock.elapsedRealtime();
@@ -190,7 +191,7 @@ public final class AgentService extends Service {
                     + "\n処理時間 " + totalMs + " ms";
             statusTime = SystemClock.elapsedRealtime();
 
-            // Preview-only: no system-wide touch injection is performed here.
+            // Capture age is relative queue growth, not absolute source-to-display latency.
             Log.i("FPSSC", "frame=" + frameCount
                     + " move=" + command.move()
                     + " aim=" + command.aim()

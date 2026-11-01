@@ -65,7 +65,9 @@ final class AgentCore {
         }
     }
 
-    private final VisionPipeline vision = new VisionPipeline();
+    private final VisionPipeline vision;
+    AgentCore() { this(false); }
+    AgentCore(boolean hudOnly) { vision = new VisionPipeline(hudOnly); }
     private final TacticalPolicy policy = new TacticalPolicy();
     private volatile WorldState lastState;
     private float pipelineLatencyEwmaMs = 12f;
@@ -92,10 +94,13 @@ final class AgentCore {
                 + " enemies=" + s.enemies().size()
                 + " shots=" + s.projectiles().size()
                 + " shift=" + fmt(s.globalFrameShift().x()) + "," + fmt(s.globalFrameShift().y())
-                + " lag=" + fmt(s.captureAgeMs() + pipelineLatencyEwmaMs) + "ms";
+                + " queueExtra=" + fmt(s.captureAgeMs()) + "ms pipeline=" + fmt(pipelineLatencyEwmaMs) + "ms";
     }
 
     static final class VisionPipeline {
+        private final boolean hudOnly;
+        VisionPipeline() { this(false); }
+        VisionPipeline(boolean hudOnly) { this.hudOnly = hudOnly; }
         private TrackManager playerTracks = new TrackManager(Kind.PLAYER, 0.12f, 2);
         private TrackManager enemyTracks = new TrackManager(Kind.ENEMY, 0.17f, 4);
         private TrackManager projectileTracks = new TrackManager(Kind.PROJECTILE, 0.20f, 3);
@@ -132,9 +137,19 @@ final class AgentCore {
             MotionEstimate motion = globalMotion.estimate(b);
             Vec2 frameShift = motion.confidence() >= 0.16f ? motion.shift() : new Vec2(0, 0);
 
-            List<Detection> playerDetections = connectedComponents(b, Kind.PLAYER, 0.12f, 0.88f, 0.12f, 0.90f, 4);
-            List<Detection> enemyDetections = connectedComponents(b, Kind.ENEMY, 0.03f, 0.97f, 0.04f, 0.94f, 14);
-            List<Detection> projectileDetections = connectedComponents(b, Kind.PROJECTILE, 0.02f, 0.98f, 0.04f, 0.96f, 28);
+            List<Detection> bars = healthBars(b);
+            List<Detection> playerDetections = new ArrayList<>();
+            List<Detection> enemyDetections = new ArrayList<>();
+            for (Detection d : bars) {
+                if (d.kind() == Kind.PLAYER) playerDetections.add(d);
+                else enemyDetections.add(d);
+            }
+            // Keep the synthetic baseline only when no game HUD is present.
+            if (bars.isEmpty() && !hudOnly) {
+                playerDetections = connectedComponents(b, Kind.PLAYER, 0.12f, 0.88f, 0.12f, 0.90f, 4);
+                enemyDetections = connectedComponents(b, Kind.ENEMY, 0.03f, 0.97f, 0.04f, 0.94f, 14);
+            }
+            List<Detection> projectileDetections = connectedComponents(b, Kind.PROJECTILE, 0.22f, 0.78f, 0.08f, 0.83f, 28);
 
             playerDetections.sort(Comparator.comparingDouble(d -> -playerScore(d)));
             if (playerDetections.size() > 2) {
@@ -154,6 +169,7 @@ final class AgentCore {
 
             enemies = visibleTracks(enemies, 0.27f, 14);
             projectiles = visibleTracks(projectiles, 0.20f, 28);
+            projectiles.removeIf(t -> t.ageFrames() < 2 || t.velocity().len() < .08f || t.radius() > .03f);
 
             float quality = player == null ? 0f : player.confidence();
             if (!enemies.isEmpty()) quality = clamp(quality * 0.68f + meanConfidence(enemies) * 0.32f, 0f, 1f);
@@ -168,6 +184,73 @@ final class AgentCore {
                     frameShift,
                     clamp(quality, 0f, 1f)
             );
+        }
+
+        /** Brawl Stars HUD anchors: compact horizontal health fill plus white HP text above. */
+        private List<Detection> healthBars(Bitmap b) {
+            int w = b.getWidth(), h = b.getHeight();
+            byte[] mask = new byte[w * h];
+            for (int y = (int)(h * .10f); y < h * .83f; y++) {
+                for (int x = (int)(w * .05f); x < w * .95f; x++) {
+                    if ((x < w * .22f || x > w * .78f) && y > h * .55f) continue;
+                    int c = b.getPixel(x, y), r = Color.red(c), g = Color.green(c), bl = Color.blue(c);
+                    if (g > 145 && g > r * 1.25f && g > bl * 1.2f) mask[y * w + x] = 1;
+                    else if (r > 160 && g < 115 && r > g * 1.6f && r > bl * 1.25f) mask[y * w + x] = 2;
+                }
+            }
+            int[] queue = new int[mask.length];
+            List<Detection> bars = new ArrayList<>();
+            for (int start = 0; start < mask.length; start++) {
+                byte kind = mask[start];
+                if (kind == 0) continue;
+                int head = 0, tail = 1, minX = start % w, maxX = minX, minY = start / w, maxY = minY;
+                queue[0] = start;
+                mask[start] = 0;
+                while (head < tail) {
+                    int p = queue[head++], x = p % w, y = p / w;
+                    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+                    minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+                    for (int k = 0; k < 4; k++) {
+                        int nx = x + (k == 0 ? -1 : k == 1 ? 1 : 0);
+                        int ny = y + (k == 2 ? -1 : k == 3 ? 1 : 0);
+                        if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+                        int n = ny * w + nx;
+                        if (mask[n] == kind) { mask[n] = 0; queue[tail++] = n; }
+                    }
+                }
+                int bw = maxX - minX + 1, bh = maxY - minY + 1;
+                if (bw < h * .025f || bw > h * .15f || bh < 1 || bh > h * .025f
+                        || bw < bh * 2.2f || tail < bw * bh * .40f) continue;
+                int fullWidth = Math.max(bw, Math.round(h * .09f));
+                int white = 0;
+                for (int y = Math.max(0, minY - Math.round(h * .035f)); y < minY; y++) {
+                    for (int x = minX; x < Math.min(w, minX + fullWidth); x++) {
+                        int c = b.getPixel(x, y);
+                        if (Color.red(c) > 195 && Color.green(c) > 195 && Color.blue(c) > 195) white++;
+                    }
+                }
+                if (white < Math.max(2, fullWidth / 8)) continue;
+                int darkBorder = 0;
+                for (int y = Math.max(0, minY - Math.round(h * .035f)); y <= Math.min(h - 1, maxY + 1); y++) {
+                    int dark = 0;
+                    for (int x = minX; x < Math.min(w, minX + fullWidth); x++) {
+                        int c = b.getPixel(x, y);
+                        if (Color.red(c) < 135 && Color.green(c) < 90 && Color.blue(c) < 120) dark++;
+                    }
+                    darkBorder = Math.max(darkBorder, dark);
+                }
+                if (darkBorder < fullWidth * .30f) continue;
+                float cx = (minX + fullWidth / 2f) / w;
+                float cy = (minY + bh / 2f + h * .085f) / h;
+                if (cy > .83f) continue;
+                bars.add(new Detection(kind == 1 ? Kind.PLAYER : Kind.ENEMY,
+                        new Vec2(cx, cy), .025f, .88f));
+            }
+            // Orange ammunition segments immediately beneath our own HP are not enemies.
+            bars.removeIf(d -> d.kind() == Kind.ENEMY && bars.stream().anyMatch(p ->
+                    p.kind() == Kind.PLAYER && Math.abs(p.pos().x() - d.pos().x()) < .055f
+                    && Math.abs(p.pos().y() - d.pos().y()) < .06f));
+            return bars;
         }
 
         private float playerScore(Detection d) {
@@ -365,6 +448,7 @@ final class AgentCore {
             int r = Color.red(c), g = Color.green(c), b = Color.blue(c);
             int max = Math.max(r, Math.max(g, b));
             int min = Math.min(r, Math.min(g, b));
+            if (kind == Kind.PROJECTILE && (r < 175 || g < 135 || b > 145 || Math.min(r, g) - b < 65)) return 0f;
             int chroma = max - min;
             int sum = r + g + b;
             if (max < 55 || sum < 165 || chroma < 18) return 0f;
