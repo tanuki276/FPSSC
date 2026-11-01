@@ -24,7 +24,11 @@ public final class GestureIntegrationTest {
             return out.toString("UTF-8").trim();
         }
     }
-    private static String quoted(String value) { return "'"+value.replace("'","'\\''")+"'"; }
+    private static String settingValue(String value) {
+        // executeShellCommand tokenizes directly; shell quotes would become literal setting bytes.
+        if(!value.matches("[A-Za-z0-9_./:]+")) throw new IllegalArgumentException("Unexpected service list");
+        return value;
+    }
     @Test public void continuedMovementAttackReleaseAndForegroundGate() throws Exception {
         automation=instrumentation.getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES);
         String previous=shell("settings get secure enabled_accessibility_services");
@@ -36,7 +40,7 @@ public final class GestureIntegrationTest {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             SystemClock.sleep(800);
             String component="com.tanuki276.fpssc/com.tanuki276.fpssc.TouchService";
-            shell("settings put secure enabled_accessibility_services "+quoted(previous.equals("null")?component:previous+":"+component));
+            shell("settings put secure enabled_accessibility_services "+settingValue(previous.equals("null")?component:previous+":"+component));
             shell("settings put secure accessibility_enabled 1");
             long deadline=SystemClock.elapsedRealtime()+15000;
             while(TouchService.instrumentationInstance()==null&&SystemClock.elapsedRealtime()<deadline) SystemClock.sleep(100);
@@ -85,8 +89,8 @@ public final class GestureIntegrationTest {
             if(engine.get()!=null) instrumentation.runOnMainSync(()->engine.get().stop());
             TouchService.arm(false);
             if(activity!=null) { GestureTestActivity closing=activity; instrumentation.runOnMainSync(closing::finish); }
-            shell(previous.equals("null")?"settings delete secure enabled_accessibility_services":"settings put secure enabled_accessibility_services "+quoted(previous));
-            shell(enabled.equals("null")?"settings delete secure accessibility_enabled":"settings put secure accessibility_enabled "+quoted(enabled));
+            shell(previous.equals("null")?"settings delete secure enabled_accessibility_services":"settings put secure enabled_accessibility_services "+settingValue(previous));
+            shell(enabled.equals("null")?"settings delete secure accessibility_enabled":"settings put secure accessibility_enabled "+settingValue(enabled));
         }
     }
 }
