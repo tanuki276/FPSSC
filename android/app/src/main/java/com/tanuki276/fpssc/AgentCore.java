@@ -5,6 +5,7 @@ import android.graphics.Color;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -64,7 +65,9 @@ final class AgentCore {
         }
     }
 
-    private final VisionPipeline vision = new VisionPipeline();
+    private final VisionPipeline vision;
+    AgentCore() { this(false); }
+    AgentCore(boolean hudOnly) { vision = new VisionPipeline(hudOnly); }
     private final TacticalPolicy policy = new TacticalPolicy();
     private volatile WorldState lastState;
     private float pipelineLatencyEwmaMs = 12f;
@@ -74,14 +77,23 @@ final class AgentCore {
     }
 
     ControlCommand analyze(Bitmap frame, long nowMs, float captureAgeMs) {
-        WorldState state = vision.detect(frame, nowMs, captureAgeMs);
+        return analyzePixels(FramePixels.copy(frame), nowMs, captureAgeMs);
+    }
+
+    ControlCommand analyzePixels(FramePixels frame, long nowMs, float captureAgeMs) {
+        WorldState state = vision.detectPixels(frame, nowMs, captureAgeMs);
         lastState = state;
         return policy.decide(state, pipelineLatencyEwmaMs);
     }
 
     void observePipelineLatency(float elapsedMs) {
-        if (elapsedMs < 0f || elapsedMs > 500f) return;
+        if (!Float.isFinite(elapsedMs) || elapsedMs < 0f || elapsedMs > 500f) return;
         pipelineLatencyEwmaMs = pipelineLatencyEwmaMs * 0.86f + elapsedMs * 0.14f;
+    }
+
+    boolean hasObservedPlayer() {
+        WorldState s = lastState;
+        return s != null && s.player() != null && s.player().observed() && s.player().confidence() >= .38f;
     }
 
     String telemetry() {
@@ -91,21 +103,45 @@ final class AgentCore {
                 + " enemies=" + s.enemies().size()
                 + " shots=" + s.projectiles().size()
                 + " shift=" + fmt(s.globalFrameShift().x()) + "," + fmt(s.globalFrameShift().y())
-                + " lag=" + fmt(s.captureAgeMs() + pipelineLatencyEwmaMs) + "ms";
+                + " queueExtra=" + fmt(s.captureAgeMs()) + "ms pipeline=" + fmt(pipelineLatencyEwmaMs) + "ms";
     }
 
     static final class VisionPipeline {
-        private final TrackManager playerTracks = new TrackManager(Kind.PLAYER, 0.12f, 2);
-        private final TrackManager enemyTracks = new TrackManager(Kind.ENEMY, 0.17f, 4);
-        private final TrackManager projectileTracks = new TrackManager(Kind.PROJECTILE, 0.20f, 3);
-        private final GlobalMotionEstimator globalMotion = new GlobalMotionEstimator();
+        private final boolean hudOnly;
+        VisionPipeline() { this(false); }
+        VisionPipeline(boolean hudOnly) { this.hudOnly = hudOnly; }
+        private TrackManager playerTracks = new TrackManager(Kind.PLAYER, 0.12f, 2);
+        private TrackManager enemyTracks = new TrackManager(Kind.ENEMY, 0.17f, 4);
+        private TrackManager projectileTracks = new TrackManager(Kind.PROJECTILE, 0.20f, 3);
+        private GlobalMotionEstimator globalMotion = new GlobalMotionEstimator();
         private long previousFrameMs;
+        private int previousWidth;
+        private int previousHeight;
+
+        private void reset() {
+            playerTracks = new TrackManager(Kind.PLAYER, 0.12f, 2);
+            enemyTracks = new TrackManager(Kind.ENEMY, 0.17f, 4);
+            projectileTracks = new TrackManager(Kind.PROJECTILE, 0.20f, 3);
+            globalMotion = new GlobalMotionEstimator();
+            previousFrameMs = 0;
+        }
 
         WorldState detect(Bitmap b, long nowMs, float captureAgeMs) {
+            return detectPixels(FramePixels.copy(b), nowMs, captureAgeMs);
+        }
+
+        WorldState detectPixels(FramePixels b, long nowMs, float captureAgeMs) {
             if (b == null || b.getWidth() < 96 || b.getHeight() < 96) {
-                return new WorldState(null, List.of(), List.of(), nowMs, captureAgeMs, new Vec2(0, 0), 0f);
+                reset();
+                return new WorldState(null, Collections.emptyList(), Collections.emptyList(), nowMs, 0f, new Vec2(0, 0), 0f);
             }
 
+            if (b.getWidth() != previousWidth || b.getHeight() != previousHeight
+                    || nowMs <= previousFrameMs || nowMs - previousFrameMs > 500L) {
+                reset();
+            }
+            previousWidth = b.getWidth();
+            previousHeight = b.getHeight();
             float dt = previousFrameMs == 0
                     ? 1f / 30f
                     : clamp((nowMs - previousFrameMs) / 1000f, 1f / 120f, 0.20f);
@@ -114,9 +150,19 @@ final class AgentCore {
             MotionEstimate motion = globalMotion.estimate(b);
             Vec2 frameShift = motion.confidence() >= 0.16f ? motion.shift() : new Vec2(0, 0);
 
-            List<Detection> playerDetections = connectedComponents(b, Kind.PLAYER, 0.12f, 0.88f, 0.12f, 0.90f, 4);
-            List<Detection> enemyDetections = connectedComponents(b, Kind.ENEMY, 0.03f, 0.97f, 0.04f, 0.94f, 14);
-            List<Detection> projectileDetections = connectedComponents(b, Kind.PROJECTILE, 0.02f, 0.98f, 0.04f, 0.96f, 28);
+            List<Detection> bars = healthBars(b);
+            List<Detection> playerDetections = new ArrayList<>();
+            List<Detection> enemyDetections = new ArrayList<>();
+            for (Detection d : bars) {
+                if (d.kind() == Kind.PLAYER) playerDetections.add(d);
+                else enemyDetections.add(d);
+            }
+            // Keep the synthetic baseline only when no game HUD is present.
+            if (bars.isEmpty() && !hudOnly) {
+                playerDetections = connectedComponents(b, Kind.PLAYER, 0.12f, 0.88f, 0.12f, 0.90f, 4);
+                enemyDetections = connectedComponents(b, Kind.ENEMY, 0.03f, 0.97f, 0.04f, 0.94f, 14);
+            }
+            List<Detection> projectileDetections = connectedComponents(b, Kind.PROJECTILE, 0.22f, 0.78f, 0.08f, 0.83f, 28);
 
             playerDetections.sort(Comparator.comparingDouble(d -> -playerScore(d)));
             if (playerDetections.size() > 2) {
@@ -136,6 +182,7 @@ final class AgentCore {
 
             enemies = visibleTracks(enemies, 0.27f, 14);
             projectiles = visibleTracks(projectiles, 0.20f, 28);
+            projectiles.removeIf(t -> t.ageFrames() < 2 || t.velocity().len() < .08f || t.radius() > .03f);
 
             float quality = player == null ? 0f : player.confidence();
             if (!enemies.isEmpty()) quality = clamp(quality * 0.68f + meanConfidence(enemies) * 0.32f, 0f, 1f);
@@ -150,6 +197,73 @@ final class AgentCore {
                     frameShift,
                     clamp(quality, 0f, 1f)
             );
+        }
+
+        /** Brawl Stars HUD anchors: compact horizontal health fill plus white HP text above. */
+        private List<Detection> healthBars(FramePixels b) {
+            int w = b.getWidth(), h = b.getHeight();
+            byte[] mask = new byte[w * h];
+            for (int y = (int)(h * .10f); y < h * .83f; y++) {
+                for (int x = (int)(w * .05f); x < w * .95f; x++) {
+                    if ((x < w * .22f || x > w * .78f) && y > h * .55f) continue;
+                    int c = b.getPixel(x, y), r = Color.red(c), g = Color.green(c), bl = Color.blue(c);
+                    if (g > 145 && g > r * 1.25f && g > bl * 1.2f) mask[y * w + x] = 1;
+                    else if (r > 160 && g < 115 && r > g * 1.6f && r > bl * 1.25f) mask[y * w + x] = 2;
+                }
+            }
+            int[] queue = new int[mask.length];
+            List<Detection> bars = new ArrayList<>();
+            for (int start = 0; start < mask.length; start++) {
+                byte kind = mask[start];
+                if (kind == 0) continue;
+                int head = 0, tail = 1, minX = start % w, maxX = minX, minY = start / w, maxY = minY;
+                queue[0] = start;
+                mask[start] = 0;
+                while (head < tail) {
+                    int p = queue[head++], x = p % w, y = p / w;
+                    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+                    minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+                    for (int k = 0; k < 4; k++) {
+                        int nx = x + (k == 0 ? -1 : k == 1 ? 1 : 0);
+                        int ny = y + (k == 2 ? -1 : k == 3 ? 1 : 0);
+                        if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+                        int n = ny * w + nx;
+                        if (mask[n] == kind) { mask[n] = 0; queue[tail++] = n; }
+                    }
+                }
+                int bw = maxX - minX + 1, bh = maxY - minY + 1;
+                if (bw < h * .025f || bw > h * .15f || bh < 1 || bh > h * .025f
+                        || bw < bh * 2.2f || tail < bw * bh * .40f) continue;
+                int fullWidth = Math.max(bw, Math.round(h * .09f));
+                int white = 0;
+                for (int y = Math.max(0, minY - Math.round(h * .035f)); y < minY; y++) {
+                    for (int x = minX; x < Math.min(w, minX + fullWidth); x++) {
+                        int c = b.getPixel(x, y);
+                        if (Color.red(c) > 195 && Color.green(c) > 195 && Color.blue(c) > 195) white++;
+                    }
+                }
+                if (white < Math.max(2, fullWidth / 8)) continue;
+                int darkBorder = 0;
+                for (int y = Math.max(0, minY - Math.round(h * .035f)); y <= Math.min(h - 1, maxY + 1); y++) {
+                    int dark = 0;
+                    for (int x = minX; x < Math.min(w, minX + fullWidth); x++) {
+                        int c = b.getPixel(x, y);
+                        if (Color.red(c) < 135 && Color.green(c) < 90 && Color.blue(c) < 120) dark++;
+                    }
+                    darkBorder = Math.max(darkBorder, dark);
+                }
+                if (darkBorder < fullWidth * .30f) continue;
+                float cx = (minX + fullWidth / 2f) / w;
+                float cy = (minY + bh / 2f + h * .085f) / h;
+                if (cy > .83f) continue;
+                bars.add(new Detection(kind == 1 ? Kind.PLAYER : Kind.ENEMY,
+                        new Vec2(cx, cy), .025f, .88f));
+            }
+            // Orange ammunition segments immediately beneath our own HP are not enemies.
+            bars.removeIf(d -> d.kind() == Kind.ENEMY && bars.stream().anyMatch(p ->
+                    p.kind() == Kind.PLAYER && Math.abs(p.pos().x() - d.pos().x()) < .055f
+                    && Math.abs(p.pos().y() - d.pos().y()) < .06f));
+            return bars;
         }
 
         private float playerScore(Detection d) {
@@ -181,7 +295,7 @@ final class AgentCore {
          * Projectiles use a denser first pass because one missed sample can erase a small object.
          */
         private List<Detection> connectedComponents(
-                Bitmap b, Kind kind,
+                FramePixels b, Kind kind,
                 float x0n, float x1n, float y0n, float y1n,
                 int max
         ) {
@@ -295,7 +409,7 @@ final class AgentCore {
             return out;
         }
 
-        private Detection refineDetection(Bitmap b, Detection coarse, int coarseStep) {
+        private Detection refineDetection(FramePixels b, Detection coarse, int coarseStep) {
             int w = b.getWidth(), h = b.getHeight();
             int cx = Math.round(coarse.pos().x() * w);
             int cy = Math.round(coarse.pos().y() * h);
@@ -347,6 +461,7 @@ final class AgentCore {
             int r = Color.red(c), g = Color.green(c), b = Color.blue(c);
             int max = Math.max(r, Math.max(g, b));
             int min = Math.min(r, Math.min(g, b));
+            if (kind == Kind.PROJECTILE && (r < 175 || g < 135 || b > 145 || Math.min(r, g) - b < 65)) return 0f;
             int chroma = max - min;
             int sum = r + g + b;
             if (max < 55 || sum < 165 || chroma < 18) return 0f;
@@ -386,7 +501,7 @@ final class AgentCore {
         private int[] previous;
         private int previousH;
 
-        MotionEstimate estimate(Bitmap b) {
+        MotionEstimate estimate(FramePixels b) {
             int hGrid = clampInt(Math.round(GRID_W * (b.getHeight() / (float) b.getWidth())), 44, 128);
             int[] current = sampleLuma(b, GRID_W, hGrid);
             if (previous == null || previousH != hGrid) {
@@ -423,7 +538,7 @@ final class AgentCore {
             return new MotionEstimate(shift, confidence);
         }
 
-        private int[] sampleLuma(Bitmap b, int gw, int gh) {
+        private int[] sampleLuma(FramePixels b, int gw, int gh) {
             int[] out = new int[gw * gh];
             int w = b.getWidth(), h = b.getHeight();
             for (int gy = 0; gy < gh; gy++) {
@@ -611,10 +726,11 @@ final class AgentCore {
         private static final float PROJECTILE_SPEED = 1.75f;
         private Vec2 previousAim = new Vec2(0, 0);
         private int stableAimFrames;
+        private int targetId = -1;
 
         ControlCommand decide(WorldState s, float pipelineLatencyMs) {
             Track p = s.player();
-            if (p == null || p.confidence() < 0.38f) {
+            if (p == null || !p.observed() || p.confidence() < 0.38f) {
                 stableAimFrames = 0;
                 return ControlCommand.idle("player uncertain");
             }
@@ -640,6 +756,11 @@ final class AgentCore {
                 return ControlCommand.idle("no stable target");
             }
 
+            if (targetId != enemy.id()) {
+                targetId = enemy.id();
+                stableAimFrames = 0;
+                previousAim = new Vec2(0, 0);
+            }
             Vec2 enemyNow = enemy.project(lagSec);
             Vec2 toEnemy = enemyNow.sub(playerNow);
             float distance = toEnemy.len();
@@ -657,7 +778,7 @@ final class AgentCore {
             else stableAimFrames = Math.max(0, stableAimFrames - 1);
             previousAim = aim;
 
-            boolean reliableTrack = enemy.confidence() >= 0.52f && enemy.ageFrames() >= 2;
+            boolean reliableTrack = enemy.observed() && enemy.confidence() >= 0.52f && enemy.ageFrames() >= 2;
             boolean stableAim = stableAimFrames >= 2 || distance < 0.18f;
             boolean fire = reliableTrack && stableAim && distance <= 0.50f;
 
@@ -728,7 +849,9 @@ final class AgentCore {
                         .add(shot.acceleration().sub(player.acceleration()).mul(0.5f * t * t));
                 float miss = missVec.len();
                 boolean approaching = r.dot(v) < 0f;
-                if (!approaching) continue;
+                // A fast approaching shot can still pass far outside the collision envelope.
+                float collisionRadius = Math.max(0.035f, player.radius() + shot.radius() + 0.025f);
+                if (!approaching || miss > collisionRadius) continue;
 
                 float timeScore = 1f - clamp(t / 0.52f, 0f, 1f);
                 float missScore = 1f - clamp(miss / 0.155f, 0f, 1f);

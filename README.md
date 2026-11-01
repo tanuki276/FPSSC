@@ -1,92 +1,84 @@
 # FPSSC
 
-FPSSC is now primarily an **Android real-time game-vision research harness** inspired by the architecture of COSC and by public Windows Brawl Stars automation projects that separate perception, tracking, tactical decisions, and controls.
+Android-only screen perception and experimental touch-control app for Brawl Stars.
+Version **3.0.0** automatically locates visible movement and normal-attack controls.
+There are no coordinate fields or save/calibration buttons.
 
-The Android implementation lives under `android/`.
+## Install and start
 
-## Android architecture
+1. Download `FPSSC-3.0.0.apk` from the [3.0.0 release](https://github.com/tanuki276/FPSSC/releases/tag/v3.0.0).
+   See [release notes](docs/releases/3.0.0.md) for the test signing certificate and update compatibility.
+2. Open FPSSC. The title should show **3.0.0**.
+3. Use **操作サービスを有効にする** to enable FPSSC in Android Accessibility settings.
+4. Press **画面共有を開始** in landscape and choose the entire screen.
+5. Turn **自動操作** ON and switch to the Brawl Stars practice scene.
+6. Once the player and visible joystick artwork are recognized, the app acquires
+   movement/attack centers automatically. Positions must agree across three scans.
+7. Stop from the persistent notification's **停止** action or FPSSC's **停止** button.
 
-```text
-MediaProjection
-    ↓
-ImageReader / latest frame
-    ↓
-VisionPipeline
-    ↓
-WorldState
-  ├─ player
-  ├─ enemies
-  └─ projectiles
-    ↓
-TacticalPolicy
-  ├─ approach
-  ├─ kite
-  ├─ projectile dodge
-  └─ predicted aim
-    ↓
-ControlCommand
-  ├─ move vector
-  ├─ aim vector
-  ├─ fire
-  └─ super
-    ↓
-preview/log sink
+Automatic control starts OFF. Old saved coordinate preferences are ignored.
+If the app cannot recognize the scene or buttons, diagnostics include separate movement/attack candidate counts. The last game-foreground input status and gesture sent/completed/cancelled counters remain visible when returning to FPSSC. **診断結果を共有** includes perception and input status.
+
+## Implementation
+
+- `AgentService`: full-display MediaProjection capture, direct downsampled RGBA processing,
+  resource lifecycle, telemetry, scene/layout/input coordination.
+- `AgentCore`: health-bar-based player/enemy detection, temporal tracking, moving
+  projectile candidates and range/aim/dodge decisions.
+- `ControlLocator`: image-derived joystick centers, three-observation confirmation,
+  short-occlusion tolerance, layout expiry and automatic reacquisition.
+- `TouchService` / `GestureEngine`: active-window-verified Android AccessibilityService input with a continued movement pointer; at most one pending
+  command, foreground-package gating, full-display dimension checks, age limit,
+  explicit stop, and aspect-correct gesture directions.
+- `MainActivity`: start/stop, service setup, automatic-control switch and diagnostics.
+
+Launcher/round/themed icons and a monochrome notification icon are included as
+Android vector/adaptive resources. No bitmap downloads or external icon fonts are
+required.
+
+For source reviews and what was actually adopted, see
+[Implementation references](docs/IMPLEMENTATION_REFERENCES.md).
+
+## Validation
+
+Requirements: JDK 17, Gradle 8.9, Android SDK 35; .NET SDK 8 for the C# reference.
+
+```sh
+bash scripts/test-core.sh
+gradle -p android assembleDebug assembleRelease lintRelease
+gradle -p android connectedDebugAndroidTest
+dotnet run --project tests/FPSSC.Tests --configuration Release
 ```
 
-The current Android prototype deliberately stops at `ControlCommand`: it does not contain live-game system-wide touch injection, anti-cheat bypasses, or code intended to automate competitive online matches. This makes the perception and policy layers usable with recorded footage, test applications, synthetic arenas, or software you own/control.
+For the optional local regression against the supplied practice screenshot:
 
-## Why this structure
-
-Public Windows projects commonly split the system into roughly the same pieces:
-
-- screen capture / emulator integration
-- object detection (often YOLO/OpenCV)
-- tracking and state extraction
-- tactical logic such as movement, aiming and dodging
-- a separate control backend
-
-FPSSC maps those layers onto Android instead of copying a Windows emulator input backend:
-
-- Windows capture → Android `MediaProjection`
-- desktop detector → `VisionPipeline`
-- tactical module → `TacticalPolicy`
-- mouse/keyboard/emulator controller → `ControlCommand` abstraction
-
-This is also a natural extension of COSC, whose strongest reusable part is its fast capture → analyze → decide loop.
-
-## Current Android prototype
-
-`android/app/src/main/java/com/tanuki276/fpssc/`
-
-- `MainActivity.java` — requests screen-capture permission
-- `AgentService.java` — foreground MediaProjection capture loop, latest-frame processing, telemetry
-- `AgentCore.java` — normalized coordinates, lightweight color/blob baseline detector, velocity estimation, projectile dodge, predicted aim, range management
-
-The detector is intentionally a simple baseline. For more serious experiments, replace `VisionPipeline` with an ONNX/TFLite detector or a purpose-built OpenCV pipeline while leaving the rest of the agent unchanged.
-
-## Build
-
-Open the `android/` directory in Android Studio, or use a local Gradle installation compatible with Android Gradle Plugin 8.7.x.
-
-Requirements:
-
-- Android SDK 35
-- Java 17
-- Android 8.0+ (`minSdk 26`)
-
-## Relationship to COSC
-
-COSC is specialized for a small discrete action space. FPSSC generalizes the decision output to 2D vectors:
-
-```text
-move = (x, y)
-aim  = (x, y)
-fire = true/false
-super = true/false
+```sh
+bash scripts/test-core.sh /path/to/practice-screenshot.jpg
 ```
 
-That representation is suitable for testing twin-stick-style action-game agents without hard-coding three buttons or a three-lane world model.
+The image is not stored in the repository. This scene-specific regression checks
+player/enemy recognition, no moving shots in the static scene, movement/fire
+output and automatic movement/attack-button centers at production analysis size.
+Synthetic tests cover relocated/scaled control artwork, red attack, false super,
+missing buttons, temporal stability, occlusion expiry and scene/resize reset.
+JVM Bitmap/Color fixtures are test-only and are never packaged into the APK.
+GitHub Actions runs regression suites, Android build/lint, emulator touch integration and APK upload. On main, publication of 3.0.0 waits for all three jobs. The release build excludes the debug-only instrumentation activity.
 
-## Legacy prototype
+## Current limits
 
-The earlier .NET synthetic-arena prototype remains under `src/FPSSC/` for now as a reference implementation of the same capture → vision → policy → command separation. The Android implementation is the active direction.
+This is still experimental, not a device-validated autonomous player. The supplied
+static practice screenshot is recognized; real touch behavior, movement sequences,
+skins/maps, effects and HUD occlusions still need device/sequence testing.
+
+- The control locator expects visible blue/cyan movement and orange/red attack
+  artwork in the lower-left/lower-right parts of a landscape display. It does not
+  support arbitrary custom controls placed anywhere, invisible buttons or every
+  theme. Undetected controls do not fall back to preset coordinates.
+- Health bars anchor character positions; low/hidden HP bars may be missed.
+- Movement uses a continued pointer in 80 ms slices, with separate attack strokes. Stale input, loss of focus and stopping release the pointer. Android gesture cancellation disables automatic control. Emulator integration is not proof of Brawl Stars compatibility.
+- Menus, matchmaking, ammo management and character-specific tactics are not implemented. Android 14+ capture resize callbacks rebuild the analysis surface; on older devices restart capture after rotating/resizing.
+- `queueExtra` estimates relative source queue growth. It does not measure unknown
+  constant capture latency or subtract unrelated absolute clock epochs.
+
+The .NET synthetic-arena reference remains under `src/FPSSC`; start it with
+`dotnet run --project src/FPSSC` and stop with Ctrl+C.
