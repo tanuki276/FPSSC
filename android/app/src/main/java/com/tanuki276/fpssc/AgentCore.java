@@ -3,7 +3,6 @@ package com.tanuki276.fpssc;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -13,14 +12,8 @@ import java.util.Set;
 /**
  * Read-only perception + decision core.
  *
- * Accuracy goals:
- *  - connected components instead of overlapping fixed tiles
- *  - stable multi-frame tracks with prediction and confidence decay
- *  - velocity smoothing instead of raw frame-to-frame differencing
- *  - time-to-closest-approach projectile threat scoring
- *  - intercept-based aim prediction
- *
- * This class only emits ControlCommand objects. It does not inject input.
+ * The core intentionally stops at ControlCommand generation. It does not inject touches.
+ * Accuracy is built from spatial detection + temporal tracking + latency-aware prediction.
  */
 final class AgentCore {
     record Vec2(float x, float y) {
@@ -43,17 +36,25 @@ final class AgentCore {
             Kind kind,
             Vec2 pos,
             Vec2 velocity,
+            Vec2 acceleration,
             float radius,
             float confidence,
             int ageFrames,
             boolean observed
-    ) {}
+    ) {
+        Vec2 project(float seconds) {
+            float t = Math.max(0f, seconds);
+            return pos.add(velocity.mul(t)).add(acceleration.mul(0.5f * t * t));
+        }
+    }
 
     record WorldState(
             Track player,
             List<Track> enemies,
             List<Track> projectiles,
             long frameTimeMs,
+            float captureAgeMs,
+            Vec2 globalFrameShift,
             float quality
     ) {}
 
@@ -65,51 +66,90 @@ final class AgentCore {
 
     private final VisionPipeline vision = new VisionPipeline();
     private final TacticalPolicy policy = new TacticalPolicy();
+    private volatile WorldState lastState;
+    private float pipelineLatencyEwmaMs = 12f;
 
     ControlCommand analyze(Bitmap frame, long nowMs) {
-        return policy.decide(vision.detect(frame, nowMs));
+        return analyze(frame, nowMs, 0f);
+    }
+
+    ControlCommand analyze(Bitmap frame, long nowMs, float captureAgeMs) {
+        WorldState state = vision.detect(frame, nowMs, captureAgeMs);
+        lastState = state;
+        return policy.decide(state, pipelineLatencyEwmaMs);
+    }
+
+    void observePipelineLatency(float elapsedMs) {
+        if (elapsedMs < 0f || elapsedMs > 500f) return;
+        pipelineLatencyEwmaMs = pipelineLatencyEwmaMs * 0.86f + elapsedMs * 0.14f;
+    }
+
+    String telemetry() {
+        WorldState s = lastState;
+        if (s == null) return "state=none";
+        return "q=" + fmt(s.quality())
+                + " enemies=" + s.enemies().size()
+                + " shots=" + s.projectiles().size()
+                + " shift=" + fmt(s.globalFrameShift().x()) + "," + fmt(s.globalFrameShift().y())
+                + " lag=" + fmt(s.captureAgeMs() + pipelineLatencyEwmaMs) + "ms";
     }
 
     static final class VisionPipeline {
-        private final TrackManager playerTracks = new TrackManager(Kind.PLAYER, 0.13f, 2);
-        private final TrackManager enemyTracks = new TrackManager(Kind.ENEMY, 0.18f, 4);
-        private final TrackManager projectileTracks = new TrackManager(Kind.PROJECTILE, 0.22f, 3);
+        private final TrackManager playerTracks = new TrackManager(Kind.PLAYER, 0.12f, 2);
+        private final TrackManager enemyTracks = new TrackManager(Kind.ENEMY, 0.17f, 4);
+        private final TrackManager projectileTracks = new TrackManager(Kind.PROJECTILE, 0.20f, 3);
+        private final GlobalMotionEstimator globalMotion = new GlobalMotionEstimator();
         private long previousFrameMs;
 
-        WorldState detect(Bitmap b, long nowMs) {
+        WorldState detect(Bitmap b, long nowMs, float captureAgeMs) {
             if (b == null || b.getWidth() < 96 || b.getHeight() < 96) {
-                return new WorldState(null, List.of(), List.of(), nowMs, 0f);
+                return new WorldState(null, List.of(), List.of(), nowMs, captureAgeMs, new Vec2(0, 0), 0f);
             }
 
-            float dt = previousFrameMs == 0 ? 1f / 30f : clamp((nowMs - previousFrameMs) / 1000f, 1f / 120f, 0.20f);
+            float dt = previousFrameMs == 0
+                    ? 1f / 30f
+                    : clamp((nowMs - previousFrameMs) / 1000f, 1f / 120f, 0.20f);
             previousFrameMs = nowMs;
 
-            List<Detection> playerDetections = connectedComponents(b, Kind.PLAYER, 0.12f, 0.88f, 0.12f, 0.90f, 4);
-            List<Detection> enemyDetections = connectedComponents(b, Kind.ENEMY, 0.03f, 0.97f, 0.04f, 0.94f, 12);
-            List<Detection> projectileDetections = connectedComponents(b, Kind.PROJECTILE, 0.02f, 0.98f, 0.04f, 0.96f, 24);
+            MotionEstimate motion = globalMotion.estimate(b);
+            Vec2 frameShift = motion.confidence() >= 0.16f ? motion.shift() : new Vec2(0, 0);
 
-            // Player detections receive a center prior. This prevents bright UI fragments near
-            // the edges from stealing the player track while preserving camera movement.
+            List<Detection> playerDetections = connectedComponents(b, Kind.PLAYER, 0.12f, 0.88f, 0.12f, 0.90f, 4);
+            List<Detection> enemyDetections = connectedComponents(b, Kind.ENEMY, 0.03f, 0.97f, 0.04f, 0.94f, 14);
+            List<Detection> projectileDetections = connectedComponents(b, Kind.PROJECTILE, 0.02f, 0.98f, 0.04f, 0.96f, 28);
+
             playerDetections.sort(Comparator.comparingDouble(d -> -playerScore(d)));
             if (playerDetections.size() > 2) {
                 playerDetections = new ArrayList<>(playerDetections.subList(0, 2));
             }
 
-            List<Track> players = playerTracks.update(playerDetections, dt);
-            List<Track> enemies = enemyTracks.update(enemyDetections, dt);
-            List<Track> projectiles = projectileTracks.update(projectileDetections, dt);
+            // The camera tends to follow the player, so do not force global background motion
+            // onto the player track. It is valuable for enemy/projectile association, however.
+            List<Track> players = playerTracks.update(playerDetections, dt, new Vec2(0, 0));
+            List<Track> enemies = enemyTracks.update(enemyDetections, dt, frameShift);
+            List<Track> projectiles = projectileTracks.update(projectileDetections, dt, frameShift);
 
             Track player = players.stream()
                     .filter(t -> t.confidence() >= 0.25f)
                     .max(Comparator.comparingDouble(t -> t.confidence() + centerPrior(t.pos()) * 0.25f))
                     .orElse(null);
 
-            enemies = visibleTracks(enemies, 0.28f, 12);
-            projectiles = visibleTracks(projectiles, 0.22f, 24);
+            enemies = visibleTracks(enemies, 0.27f, 14);
+            projectiles = visibleTracks(projectiles, 0.20f, 28);
 
             float quality = player == null ? 0f : player.confidence();
-            if (!enemies.isEmpty()) quality = clamp(quality * 0.70f + meanConfidence(enemies) * 0.30f, 0f, 1f);
-            return new WorldState(player, enemies, projectiles, nowMs, quality);
+            if (!enemies.isEmpty()) quality = clamp(quality * 0.68f + meanConfidence(enemies) * 0.32f, 0f, 1f);
+            quality *= 0.90f + motion.confidence() * 0.10f;
+
+            return new WorldState(
+                    player,
+                    enemies,
+                    projectiles,
+                    nowMs,
+                    clamp(captureAgeMs, 0f, 500f),
+                    frameShift,
+                    clamp(quality, 0f, 1f)
+            );
         }
 
         private float playerScore(Detection d) {
@@ -124,24 +164,21 @@ final class AgentCore {
 
         private static List<Track> visibleTracks(List<Track> tracks, float minConfidence, int max) {
             List<Track> out = new ArrayList<>();
-            for (Track t : tracks) {
-                if (t.confidence() >= minConfidence) out.add(t);
-            }
+            for (Track t : tracks) if (t.confidence() >= minConfidence) out.add(t);
             out.sort(Comparator.comparingDouble((Track t) -> t.confidence()).reversed());
             if (out.size() > max) return new ArrayList<>(out.subList(0, max));
             return out;
         }
 
         private static float meanConfidence(List<Track> tracks) {
-            float sum = 0;
+            float sum = 0f;
             for (Track t : tracks) sum += t.confidence();
             return tracks.isEmpty() ? 0f : sum / tracks.size();
         }
 
         /**
-         * Sparse connected-components detector. It samples the frame on a regular grid, then
-         * groups spatially connected matching samples. Unlike the old overlapping-tile detector,
-         * each visual object normally yields one candidate instead of several duplicates.
+         * Sparse connected-components detector followed by a local full-resolution refinement.
+         * Projectiles use a denser first pass because one missed sample can erase a small object.
          */
         private List<Detection> connectedComponents(
                 Bitmap b, Kind kind,
@@ -154,7 +191,8 @@ final class AgentCore {
             int y0 = Math.max(0, Math.round(h * y0n));
             int y1 = Math.min(h, Math.round(h * y1n));
 
-            int step = Math.max(2, Math.round(w / 220f));
+            int targetGrid = kind == Kind.PROJECTILE ? 320 : 230;
+            int step = Math.max(1, Math.round(w / (float) targetGrid));
             int gw = Math.max(1, (x1 - x0 + step - 1) / step);
             int gh = Math.max(1, (y1 - y0 + step - 1) / step);
             byte[] mask = new byte[gw * gh];
@@ -167,12 +205,32 @@ final class AgentCore {
                 }
             }
 
+            // Suppress isolated hot pixels for larger objects. Tiny projectiles skip this pass.
+            if (kind != Kind.PROJECTILE) {
+                byte[] cleaned = mask.clone();
+                for (int gy = 1; gy < gh - 1; gy++) {
+                    for (int gx = 1; gx < gw - 1; gx++) {
+                        int p = gy * gw + gx;
+                        if (mask[p] == 0) continue;
+                        int neighbors = 0;
+                        for (int oy = -1; oy <= 1; oy++) {
+                            for (int ox = -1; ox <= 1; ox++) {
+                                if (ox == 0 && oy == 0) continue;
+                                neighbors += mask[(gy + oy) * gw + gx + ox];
+                            }
+                        }
+                        if (neighbors < 2) cleaned[p] = 0;
+                    }
+                }
+                mask = cleaned;
+            }
+
             boolean[] seen = new boolean[mask.length];
-            int[] q = new int[mask.length];
+            int[] queue = new int[mask.length];
             List<Detection> out = new ArrayList<>();
             int minCells = switch (kind) {
-                case PLAYER -> 9;
-                case ENEMY -> 7;
+                case PLAYER -> 7;
+                case ENEMY -> 6;
                 case PROJECTILE -> 2;
             };
 
@@ -180,14 +238,14 @@ final class AgentCore {
                 if (mask[start] == 0 || seen[start]) continue;
 
                 int head = 0, tail = 0;
-                q[tail++] = start;
+                queue[tail++] = start;
                 seen[start] = true;
                 int count = 0;
                 long sx = 0, sy = 0;
                 int minGx = gw, maxGx = 0, minGy = gh, maxGy = 0;
 
                 while (head < tail) {
-                    int p = q[head++];
+                    int p = queue[head++];
                     int gx = p % gw;
                     int gy = p / gw;
                     count++;
@@ -204,7 +262,7 @@ final class AgentCore {
                             int np = ny * gw + nx;
                             if (mask[np] != 0 && !seen[np]) {
                                 seen[np] = true;
-                                q[tail++] = np;
+                                queue[tail++] = np;
                             }
                         }
                     }
@@ -220,20 +278,57 @@ final class AgentCore {
                 float bboxCells = Math.max(1f, (maxGx - minGx + 1f) * (maxGy - minGy + 1f));
                 float fill = count / bboxCells;
                 float sizeScore = switch (kind) {
-                    case PLAYER -> smoothBand(radius, 0.020f, 0.095f);
-                    case ENEMY -> smoothBand(radius, 0.014f, 0.105f);
-                    case PROJECTILE -> smoothBand(radius, 0.003f, 0.050f);
+                    case PLAYER -> smoothBand(radius, 0.018f, 0.100f);
+                    case ENEMY -> smoothBand(radius, 0.012f, 0.110f);
+                    case PROJECTILE -> smoothBand(radius, 0.0025f, 0.052f);
                 };
-                float densityScore = clamp(fill * 1.5f, 0f, 1f);
-                float countScore = clamp(count / (kind == Kind.PROJECTILE ? 10f : 28f), 0f, 1f);
-                float confidence = clamp(sizeScore * 0.30f + densityScore * 0.35f + countScore * 0.35f, 0f, 1f);
+                float densityScore = clamp(fill * 1.55f, 0f, 1f);
+                float countScore = clamp(count / (kind == Kind.PROJECTILE ? 8f : 25f), 0f, 1f);
+                float confidence = clamp(sizeScore * 0.28f + densityScore * 0.36f + countScore * 0.36f, 0f, 1f);
 
-                out.add(new Detection(kind, new Vec2(cx, cy), radius, confidence));
+                Detection coarse = new Detection(kind, new Vec2(cx, cy), radius, confidence);
+                out.add(refineDetection(b, coarse, step));
             }
 
             out.sort(Comparator.comparingDouble((Detection d) -> d.confidence()).reversed());
             if (out.size() > max) return new ArrayList<>(out.subList(0, max));
             return out;
+        }
+
+        private Detection refineDetection(Bitmap b, Detection coarse, int coarseStep) {
+            int w = b.getWidth(), h = b.getHeight();
+            int cx = Math.round(coarse.pos().x() * w);
+            int cy = Math.round(coarse.pos().y() * h);
+            int halfX = clampInt(Math.round(coarse.radius() * w * 1.55f), coarseStep * 2, Math.max(8, w / 13));
+            int halfY = clampInt(Math.round(coarse.radius() * h * 1.55f), coarseStep * 2, Math.max(8, h / 13));
+            int refineStep = coarse.kind() == Kind.PROJECTILE ? 1 : 2;
+
+            float sx = 0f, sy = 0f, sw = 0f;
+            int minX = w, maxX = 0, minY = h, maxY = 0;
+            int hits = 0;
+            for (int y = Math.max(0, cy - halfY); y <= Math.min(h - 1, cy + halfY); y += refineStep) {
+                for (int x = Math.max(0, cx - halfX); x <= Math.min(w - 1, cx + halfX); x += refineStep) {
+                    int c = b.getPixel(x, y);
+                    float weight = matchStrength(c, coarse.kind());
+                    if (weight <= 0f) continue;
+                    sx += x * weight;
+                    sy += y * weight;
+                    sw += weight;
+                    hits++;
+                    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+                    minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+                }
+            }
+
+            if (hits < (coarse.kind() == Kind.PROJECTILE ? 2 : 5) || sw < 1f) return coarse;
+            float px = sx / sw / w;
+            float py = sy / sw / h;
+            float bw = Math.max(refineStep, maxX - minX + refineStep) / (float) w;
+            float bh = Math.max(refineStep, maxY - minY + refineStep) / (float) h;
+            float radius = 0.5f * (float) Math.sqrt(bw * bw + bh * bh);
+            float localSupport = clamp(hits / (coarse.kind() == Kind.PROJECTILE ? 12f : 48f), 0f, 1f);
+            float confidence = clamp(coarse.confidence() * 0.68f + localSupport * 0.32f, 0f, 1f);
+            return new Detection(coarse.kind(), new Vec2(px, py), radius, confidence);
         }
 
         private static float smoothBand(float value, float lo, float hi) {
@@ -243,30 +338,135 @@ final class AgentCore {
             return clamp(1f - (value - hi) / (hi * 0.8f), 0.05f, 1f);
         }
 
-        /** Color model expressed as brightness/chroma relationships rather than one hard RGB cut. */
         private boolean matches(int c, Kind kind) {
+            return matchStrength(c, kind) > 0.32f;
+        }
+
+        /** Continuous color score is more tolerant of brightness changes than a binary RGB box. */
+        private float matchStrength(int c, Kind kind) {
             int r = Color.red(c), g = Color.green(c), b = Color.blue(c);
             int max = Math.max(r, Math.max(g, b));
             int min = Math.min(r, Math.min(g, b));
             int chroma = max - min;
             int sum = r + g + b;
-            if (max < 65 || sum < 190 || chroma < 22) return false;
+            if (max < 55 || sum < 165 || chroma < 18) return 0f;
 
-            return switch (kind) {
-                case PLAYER ->
-                        g >= 120 && b >= 92 && g > r + 14 && b > r + 4 && (g + b) > r * 2 + 55;
-                case ENEMY ->
-                        r >= 145 && r > g + 22 && r > b + 18 && (r - Math.min(g, b)) >= 35;
-                case PROJECTILE ->
-                        r >= 165 && g >= 120 && b <= 155 && r + g > b * 2 + 115 && Math.abs(r - g) < 115;
-            };
+            float brightness = clamp((max - 55f) / 165f, 0f, 1f);
+            float saturation = clamp(chroma / 135f, 0f, 1f);
+            float hueLike;
+
+            switch (kind) {
+                case PLAYER -> {
+                    float greenLead = clamp((g - r - 6f) / 85f, 0f, 1f);
+                    float blueSupport = clamp((b - r + 8f) / 95f, 0f, 1f);
+                    hueLike = greenLead * 0.58f + blueSupport * 0.42f;
+                }
+                case ENEMY -> {
+                    float redGreen = clamp((r - g - 8f) / 110f, 0f, 1f);
+                    float redBlue = clamp((r - b - 5f) / 110f, 0f, 1f);
+                    hueLike = redGreen * 0.52f + redBlue * 0.48f;
+                }
+                case PROJECTILE -> {
+                    float warm = clamp((r + g - b * 1.55f - 65f) / 220f, 0f, 1f);
+                    float balance = 1f - clamp(Math.abs(r - g) / 140f, 0f, 1f);
+                    hueLike = warm * 0.68f + balance * 0.32f;
+                }
+                default -> hueLike = 0f;
+            }
+            return clamp(hueLike * 0.62f + saturation * 0.23f + brightness * 0.15f, 0f, 1f);
         }
     }
 
-    /** Lightweight alpha-beta-style multi-object tracker with gated association. */
+    /**
+     * Translation-only background motion estimate on a tiny luminance grid.
+     * It is used for association, not to rewrite measured target velocities.
+     */
+    static final class GlobalMotionEstimator {
+        private static final int GRID_W = 80;
+        private int[] previous;
+        private int previousH;
+
+        MotionEstimate estimate(Bitmap b) {
+            int hGrid = clampInt(Math.round(GRID_W * (b.getHeight() / (float) b.getWidth())), 44, 128);
+            int[] current = sampleLuma(b, GRID_W, hGrid);
+            if (previous == null || previousH != hGrid) {
+                previous = current;
+                previousH = hGrid;
+                return new MotionEstimate(new Vec2(0, 0), 0f);
+            }
+
+            long zeroScore = scoreShift(previous, current, GRID_W, hGrid, 0, 0);
+            long bestScore = zeroScore;
+            int bestDx = 0, bestDy = 0;
+            final int radius = 4;
+            for (int dy = -radius; dy <= radius; dy++) {
+                for (int dx = -radius; dx <= radius; dx++) {
+                    if (dx == 0 && dy == 0) continue;
+                    long score = scoreShift(previous, current, GRID_W, hGrid, dx, dy);
+                    // Small motion prior avoids jumping to a distant equally-textured patch.
+                    score += (long) (Math.abs(dx) + Math.abs(dy)) * 110L;
+                    if (score < bestScore) {
+                        bestScore = score;
+                        bestDx = dx;
+                        bestDy = dy;
+                    }
+                }
+            }
+
+            previous = current;
+            previousH = hGrid;
+            float gain = zeroScore <= 0 ? 0f : (zeroScore - bestScore) / (float) zeroScore;
+            float confidence = clamp(gain * 3.2f, 0f, 1f);
+            Vec2 shift = confidence < 0.08f
+                    ? new Vec2(0, 0)
+                    : new Vec2(bestDx / (float) GRID_W, bestDy / (float) hGrid);
+            return new MotionEstimate(shift, confidence);
+        }
+
+        private int[] sampleLuma(Bitmap b, int gw, int gh) {
+            int[] out = new int[gw * gh];
+            int w = b.getWidth(), h = b.getHeight();
+            for (int gy = 0; gy < gh; gy++) {
+                int y = Math.min(h - 1, Math.round((gy + 0.5f) * h / gh));
+                for (int gx = 0; gx < gw; gx++) {
+                    int x = Math.min(w - 1, Math.round((gx + 0.5f) * w / gw));
+                    int c = b.getPixel(x, y);
+                    int r = Color.red(c), g = Color.green(c), bl = Color.blue(c);
+                    out[gy * gw + gx] = (77 * r + 150 * g + 29 * bl) >> 8;
+                }
+            }
+            return out;
+        }
+
+        private long scoreShift(int[] prev, int[] cur, int w, int h, int dx, int dy) {
+            long score = 0;
+            int count = 0;
+            int marginX = 7, marginY = 7;
+            for (int y = marginY; y < h - marginY; y += 2) {
+                int py = y - dy;
+                if (py < marginY || py >= h - marginY) continue;
+                for (int x = marginX; x < w - marginX; x += 2) {
+                    int px = x - dx;
+                    if (px < marginX || px >= w - marginX) continue;
+                    int a = prev[py * w + px];
+                    int c = cur[y * w + x];
+                    int d = Math.abs(a - c);
+                    // Robust loss: moving objects and flashes should not dominate the estimate.
+                    score += Math.min(d, 42);
+                    count++;
+                }
+            }
+            return count == 0 ? Long.MAX_VALUE / 4 : score * 1024L / count;
+        }
+    }
+
+    record MotionEstimate(Vec2 shift, float confidence) {}
+
+    /** Kinematic multi-object tracker with global-association and acceleration smoothing. */
     static final class TrackManager {
         private static final float POSITION_ALPHA = 0.72f;
-        private static final float VELOCITY_ALPHA = 0.38f;
+        private static final float VELOCITY_ALPHA = 0.34f;
+        private static final float ACCEL_ALPHA = 0.20f;
 
         private final Kind kind;
         private final float gate;
@@ -280,49 +480,58 @@ final class AgentCore {
             this.maxMisses = maxMisses;
         }
 
-        List<Track> update(List<Detection> detections, float dt) {
+        List<Track> update(List<Detection> detections, float dt, Vec2 globalFrameShift) {
             for (MutableTrack t : tracks) {
-                t.predicted = t.pos.add(t.velocity.mul(dt));
+                t.predicted = t.pos
+                        .add(t.velocity.mul(dt))
+                        .add(t.acceleration.mul(0.5f * dt * dt))
+                        .add(globalFrameShift);
                 t.matched = false;
             }
 
-            Set<Integer> used = new HashSet<>();
-            // High-confidence observations claim tracks first.
-            List<Detection> ordered = new ArrayList<>(detections);
-            ordered.sort(Comparator.comparingDouble((Detection d) -> d.confidence()).reversed());
-
-            for (Detection d : ordered) {
-                int bestIndex = -1;
-                float bestCost = Float.MAX_VALUE;
-                for (int i = 0; i < tracks.size(); i++) {
-                    if (used.contains(i)) continue;
-                    MutableTrack t = tracks.get(i);
+            List<PairCost> pairs = new ArrayList<>();
+            for (int ti = 0; ti < tracks.size(); ti++) {
+                MutableTrack t = tracks.get(ti);
+                for (int di = 0; di < detections.size(); di++) {
+                    Detection d = detections.get(di);
                     float distance = d.pos().sub(t.predicted).len();
-                    float dynamicGate = gate + Math.min(0.10f, t.velocity.len() * dt * 1.8f);
+                    float dynamicGate = gate
+                            + Math.min(0.11f, t.velocity.len() * dt * 1.7f)
+                            + Math.min(0.05f, t.acceleration.len() * dt * dt);
                     if (distance > dynamicGate) continue;
-                    float sizePenalty = Math.abs(d.radius() - t.radius) * 0.55f;
-                    float cost = distance + sizePenalty - d.confidence() * 0.025f;
-                    if (cost < bestCost) {
-                        bestCost = cost;
-                        bestIndex = i;
-                    }
-                }
-
-                if (bestIndex >= 0) {
-                    used.add(bestIndex);
-                    tracks.get(bestIndex).correct(d, dt);
-                } else if (d.confidence() >= 0.32f) {
-                    MutableTrack n = new MutableTrack(nextId++, kind, d);
-                    n.matched = true;
-                    tracks.add(n);
-                    used.add(tracks.size() - 1);
+                    float sizeRatio = Math.abs(d.radius() - t.radius) / Math.max(0.005f, t.radius);
+                    float cost = distance
+                            + Math.min(sizeRatio, 2f) * 0.025f
+                            - d.confidence() * 0.020f
+                            - Math.min(t.ageFrames, 10) * 0.0015f;
+                    pairs.add(new PairCost(ti, di, cost));
                 }
             }
+            pairs.sort(Comparator.comparingDouble(PairCost::cost));
 
-            for (MutableTrack t : tracks) {
-                if (!t.matched) t.miss(dt);
+            Set<Integer> usedTracks = new HashSet<>();
+            Set<Integer> usedDetections = new HashSet<>();
+            for (PairCost pair : pairs) {
+                if (usedTracks.contains(pair.trackIndex()) || usedDetections.contains(pair.detectionIndex())) continue;
+                MutableTrack t = tracks.get(pair.trackIndex());
+                Detection d = detections.get(pair.detectionIndex());
+                t.correct(d, dt, globalFrameShift);
+                usedTracks.add(pair.trackIndex());
+                usedDetections.add(pair.detectionIndex());
             }
-            tracks.removeIf(t -> t.misses > maxMisses || t.confidence < 0.10f || outOfBounds(t.pos));
+
+            float spawnThreshold = kind == Kind.PROJECTILE ? 0.25f : 0.31f;
+            for (int di = 0; di < detections.size(); di++) {
+                if (usedDetections.contains(di)) continue;
+                Detection d = detections.get(di);
+                if (d.confidence() < spawnThreshold) continue;
+                MutableTrack n = new MutableTrack(nextId++, kind, d);
+                n.matched = true;
+                tracks.add(n);
+            }
+
+            for (MutableTrack t : tracks) if (!t.matched) t.miss(dt, globalFrameShift);
+            tracks.removeIf(t -> t.misses > maxMisses || t.confidence < 0.09f || outOfBounds(t.pos));
 
             List<Track> out = new ArrayList<>(tracks.size());
             for (MutableTrack t : tracks) out.add(t.snapshot());
@@ -330,8 +539,10 @@ final class AgentCore {
         }
 
         private static boolean outOfBounds(Vec2 p) {
-            return p.x() < -0.15f || p.x() > 1.15f || p.y() < -0.15f || p.y() > 1.15f;
+            return p.x() < -0.18f || p.x() > 1.18f || p.y() < -0.18f || p.y() > 1.18f;
         }
+
+        private record PairCost(int trackIndex, int detectionIndex, float cost) {}
 
         private static final class MutableTrack {
             final int id;
@@ -339,6 +550,7 @@ final class AgentCore {
             Vec2 pos;
             Vec2 predicted;
             Vec2 velocity = new Vec2(0, 0);
+            Vec2 acceleration = new Vec2(0, 0);
             float radius;
             float confidence;
             int ageFrames = 1;
@@ -354,94 +566,139 @@ final class AgentCore {
                 this.confidence = d.confidence();
             }
 
-            void correct(Detection d, float dt) {
+            void correct(Detection d, float dt, Vec2 globalFrameShift) {
+                Vec2 previousVelocity = velocity;
                 Vec2 innovation = d.pos().sub(predicted);
-                Vec2 observedVelocity = d.pos().sub(pos).mul(1f / Math.max(dt, 1f / 120f));
+                Vec2 screenDelta = d.pos().sub(pos).sub(globalFrameShift);
+                Vec2 observedVelocity = screenDelta.mul(1f / Math.max(dt, 1f / 120f));
+                Vec2 observedAcceleration = observedVelocity.sub(previousVelocity)
+                        .mul(1f / Math.max(dt, 1f / 120f));
+
                 pos = predicted.add(innovation.mul(POSITION_ALPHA));
-                velocity = velocity.mul(1f - VELOCITY_ALPHA).add(observedVelocity.mul(VELOCITY_ALPHA)).clampLen(4f);
-                radius = radius * 0.65f + d.radius() * 0.35f;
-                confidence = clamp(confidence * 0.58f + d.confidence() * 0.52f + 0.05f, 0f, 1f);
+                velocity = velocity.mul(1f - VELOCITY_ALPHA)
+                        .add(observedVelocity.mul(VELOCITY_ALPHA))
+                        .clampLen(kind == Kind.PROJECTILE ? 7f : 4f);
+                acceleration = acceleration.mul(1f - ACCEL_ALPHA)
+                        .add(observedAcceleration.mul(ACCEL_ALPHA))
+                        .clampLen(kind == Kind.PROJECTILE ? 22f : 12f);
+                radius = radius * 0.64f + d.radius() * 0.36f;
+                confidence = clamp(confidence * 0.56f + d.confidence() * 0.54f + 0.05f, 0f, 1f);
                 ageFrames++;
                 misses = 0;
                 matched = true;
             }
 
-            void miss(float dt) {
-                pos = predicted;
-                velocity = velocity.mul(0.92f);
-                confidence *= 0.72f;
+            void miss(float dt, Vec2 globalFrameShift) {
+                pos = pos
+                        .add(velocity.mul(dt))
+                        .add(acceleration.mul(0.5f * dt * dt))
+                        .add(globalFrameShift);
+                velocity = velocity.mul(0.91f);
+                acceleration = acceleration.mul(0.72f);
+                confidence *= kind == Kind.PROJECTILE ? 0.64f : 0.73f;
                 ageFrames++;
                 misses++;
                 matched = false;
             }
 
             Track snapshot() {
-                return new Track(id, kind, pos, velocity, radius, confidence, ageFrames, matched);
+                return new Track(id, kind, pos, velocity, acceleration, radius, confidence, ageFrames, matched);
             }
         }
     }
 
     static final class TacticalPolicy {
-        private static final float PROJECTILE_SPEED = 1.75f; // normalized screen units / second, research default
+        private static final float PROJECTILE_SPEED = 1.75f;
         private Vec2 previousAim = new Vec2(0, 0);
+        private int stableAimFrames;
 
-        ControlCommand decide(WorldState s) {
+        ControlCommand decide(WorldState s, float pipelineLatencyMs) {
             Track p = s.player();
             if (p == null || p.confidence() < 0.38f) {
+                stableAimFrames = 0;
                 return ControlCommand.idle("player uncertain");
             }
 
-            Threat threat = mostDangerousProjectile(p, s.projectiles());
-            if (threat != null && threat.score > 0.44f) {
-                Vec2 dodge = chooseDodge(p.pos(), threat.track);
-                return new ControlCommand(dodge, previousAim, false, false,
-                        "dodge ttc=" + fmt(threat.ttc) + " miss=" + fmt(threat.missDistance));
+            float lagSec = clamp((s.captureAgeMs() + pipelineLatencyMs) / 1000f, 0f, 0.24f);
+            Vec2 playerNow = p.project(lagSec);
+
+            Threat threat = mostDangerousProjectile(p, playerNow, s.projectiles(), lagSec);
+            if (threat != null && threat.score() > 0.43f) {
+                Vec2 dodge = chooseDodge(playerNow, threat.track(), lagSec);
+                return new ControlCommand(
+                        dodge,
+                        previousAim,
+                        false,
+                        false,
+                        "dodge ttc=" + fmt(threat.ttc()) + " miss=" + fmt(threat.missDistance())
+                );
             }
 
-            Track enemy = selectEnemy(p, s.enemies());
+            Track enemy = selectEnemy(p, playerNow, s.enemies(), lagSec);
             if (enemy == null || enemy.confidence() < 0.34f) {
+                stableAimFrames = 0;
                 return ControlCommand.idle("no stable target");
             }
 
-            Vec2 toEnemy = enemy.pos().sub(p.pos());
-            float d = toEnemy.len();
-            Vec2 aim = interceptAim(p.pos(), enemy.pos(), enemy.velocity(), PROJECTILE_SPEED);
-            float aimBlend = clamp(0.35f + enemy.confidence() * 0.45f, 0.35f, 0.80f);
-            if (previousAim.len() > 0.1f) aim = previousAim.mul(1f - aimBlend).add(aim.mul(aimBlend)).norm();
+            Vec2 enemyNow = enemy.project(lagSec);
+            Vec2 toEnemy = enemyNow.sub(playerNow);
+            float distance = toEnemy.len();
+            Vec2 relativeVelocity = enemy.velocity().sub(p.velocity());
+            Vec2 relativeAcceleration = enemy.acceleration().sub(p.acceleration());
+            Vec2 rawAim = interceptAim(playerNow, enemyNow, relativeVelocity, relativeAcceleration, PROJECTILE_SPEED);
+
+            float aimBlend = clamp(0.34f + enemy.confidence() * 0.48f, 0.34f, 0.84f);
+            Vec2 aim = previousAim.len() > 0.1f
+                    ? previousAim.mul(1f - aimBlend).add(rawAim.mul(aimBlend)).norm()
+                    : rawAim;
+
+            float aimAgreement = previousAim.len() > 0.1f ? previousAim.dot(aim) : 1f;
+            if (aimAgreement > 0.965f) stableAimFrames++;
+            else stableAimFrames = Math.max(0, stableAimFrames - 1);
             previousAim = aim;
 
-            boolean reliable = enemy.confidence() >= 0.52f && enemy.ageFrames() >= 2;
-            boolean fire = reliable && d <= 0.50f;
+            boolean reliableTrack = enemy.confidence() >= 0.52f && enemy.ageFrames() >= 2;
+            boolean stableAim = stableAimFrames >= 2 || distance < 0.18f;
+            boolean fire = reliableTrack && stableAim && distance <= 0.50f;
+
             Vec2 move;
             String reason;
-
-            if (d < 0.19f) {
+            if (distance < 0.19f) {
                 move = toEnemy.mul(-1f).norm();
                 reason = "kite close target";
-            } else if (d > 0.44f) {
+            } else if (distance > 0.44f) {
                 move = toEnemy.norm();
                 reason = "close distance";
             } else {
-                // Gentle strafe avoids a completely stationary policy while preserving aim.
                 Vec2 tangent = new Vec2(-toEnemy.y(), toEnemy.x()).norm();
+                float edgeBias = edgeSafety(playerNow.add(tangent.mul(0.14f)))
+                        - edgeSafety(playerNow.add(tangent.mul(-0.14f)));
+                if (edgeBias < 0f) tangent = tangent.mul(-1f);
                 move = tangent.mul(0.32f);
                 reason = "hold range / strafe";
             }
 
-            if (!reliable) {
+            if (!reliableTrack) {
                 fire = false;
                 reason += " (confirming target)";
+            } else if (!stableAim) {
+                fire = false;
+                reason += " (settling aim)";
             }
             return new ControlCommand(move, aim, fire, false, reason);
         }
 
-        private Track selectEnemy(Track p, List<Track> enemies) {
+        private Track selectEnemy(Track player, Vec2 playerNow, List<Track> enemies, float lagSec) {
             Track best = null;
             float bestScore = -Float.MAX_VALUE;
             for (Track e : enemies) {
-                float d = e.pos().sub(p.pos()).len();
-                float score = e.confidence() * 1.15f + Math.min(e.ageFrames(), 8) * 0.025f - d * 0.70f;
-                if (!e.observed()) score -= 0.20f;
+                Vec2 current = e.project(lagSec);
+                float d = current.sub(playerNow).len();
+                float score = e.confidence() * 1.18f
+                        + Math.min(e.ageFrames(), 10) * 0.023f
+                        - d * 0.68f
+                        - Math.min(e.acceleration().len(), 6f) * 0.012f;
+                if (!e.observed()) score -= 0.19f;
                 if (score > bestScore) {
                     bestScore = score;
                     best = e;
@@ -450,34 +707,50 @@ final class AgentCore {
             return best;
         }
 
-        private Threat mostDangerousProjectile(Track player, List<Track> projectiles) {
+        private Threat mostDangerousProjectile(
+                Track player,
+                Vec2 playerNow,
+                List<Track> projectiles,
+                float lagSec
+        ) {
             Threat best = null;
             for (Track shot : projectiles) {
-                if (shot.confidence() < 0.25f || shot.velocity().len() < 0.08f) continue;
+                if (shot.confidence() < 0.23f) continue;
+                if (shot.ageFrames() < 2 && shot.confidence() < 0.58f) continue;
 
-                Vec2 r = shot.pos().sub(player.pos());
+                Vec2 shotNow = shot.project(lagSec);
+                Vec2 r = shotNow.sub(playerNow);
                 Vec2 v = shot.velocity().sub(player.velocity());
+                if (v.len() < 0.08f) continue;
                 float vv = Math.max(v.len2(), 1e-5f);
-                float t = clamp(-r.dot(v) / vv, 0f, 0.55f);
-                float miss = r.add(v.mul(t)).len();
+                float t = clamp(-r.dot(v) / vv, 0f, 0.52f);
+                Vec2 missVec = r.add(v.mul(t))
+                        .add(shot.acceleration().sub(player.acceleration()).mul(0.5f * t * t));
+                float miss = missVec.len();
                 boolean approaching = r.dot(v) < 0f;
                 if (!approaching) continue;
 
-                float timeScore = 1f - clamp(t / 0.55f, 0f, 1f);
-                float missScore = 1f - clamp(miss / 0.16f, 0f, 1f);
-                float score = shot.confidence() * 0.25f + timeScore * 0.35f + missScore * 0.40f;
+                float timeScore = 1f - clamp(t / 0.52f, 0f, 1f);
+                float missScore = 1f - clamp(miss / 0.155f, 0f, 1f);
+                float physicalScore = clamp(v.len() / 1.2f, 0f, 1f);
+                float score = shot.confidence() * 0.22f
+                        + timeScore * 0.30f
+                        + missScore * 0.38f
+                        + physicalScore * 0.10f;
                 Threat candidate = new Threat(shot, t, miss, score);
-                if (best == null || candidate.score > best.score) best = candidate;
+                if (best == null || candidate.score() > best.score()) best = candidate;
             }
             return best;
         }
 
-        private Vec2 chooseDodge(Vec2 player, Track projectile) {
-            Vec2 dir = projectile.velocity().norm();
+        private Vec2 chooseDodge(Vec2 player, Track projectile, float lagSec) {
+            Vec2 dir = projectile.velocity()
+                    .add(projectile.acceleration().mul(Math.min(0.12f, lagSec)))
+                    .norm();
             Vec2 a = new Vec2(-dir.y(), dir.x());
             Vec2 b = a.mul(-1f);
-            Vec2 pa = player.add(a.mul(0.16f));
-            Vec2 pb = player.add(b.mul(0.16f));
+            Vec2 pa = player.add(a.mul(0.17f));
+            Vec2 pb = player.add(b.mul(0.17f));
             return edgeSafety(pa) >= edgeSafety(pb) ? a : b;
         }
 
@@ -486,45 +759,38 @@ final class AgentCore {
             return clamp(edge / 0.22f, -1f, 1f);
         }
 
-        /** Solve |relative + targetVelocity*t| = projectileSpeed*t. */
-        private Vec2 interceptAim(Vec2 shooter, Vec2 target, Vec2 targetVelocity, float projectileSpeed) {
+        /** Iterative intercept solver that includes relative acceleration. */
+        private Vec2 interceptAim(
+                Vec2 shooter,
+                Vec2 target,
+                Vec2 relativeVelocity,
+                Vec2 relativeAcceleration,
+                float projectileSpeed
+        ) {
             Vec2 r = target.sub(shooter);
-            float a = targetVelocity.len2() - projectileSpeed * projectileSpeed;
-            float b = 2f * r.dot(targetVelocity);
-            float c = r.len2();
-            float t = 0f;
-
-            if (Math.abs(a) < 1e-5f) {
-                if (Math.abs(b) > 1e-5f) t = -c / b;
-            } else {
-                float disc = b * b - 4f * a * c;
-                if (disc >= 0f) {
-                    float root = (float) Math.sqrt(disc);
-                    float t1 = (-b - root) / (2f * a);
-                    float t2 = (-b + root) / (2f * a);
-                    t = smallestPositive(t1, t2);
-                }
+            float t = clamp(r.len() / Math.max(projectileSpeed, 0.05f), 0f, 0.45f);
+            for (int i = 0; i < 4; i++) {
+                Vec2 future = target
+                        .add(relativeVelocity.mul(t))
+                        .add(relativeAcceleration.mul(0.5f * t * t));
+                float next = future.sub(shooter).len() / Math.max(projectileSpeed, 0.05f);
+                t = clamp(t * 0.35f + next * 0.65f, 0f, 0.45f);
             }
-
-            if (!(t > 0f) || Float.isNaN(t) || Float.isInfinite(t)) {
-                t = clamp(r.len() / projectileSpeed, 0f, 0.35f);
-            }
-            t = clamp(t, 0f, 0.45f);
-            return target.add(targetVelocity.mul(t)).sub(shooter).norm();
-        }
-
-        private float smallestPositive(float a, float b) {
-            boolean ap = a > 0f, bp = b > 0f;
-            if (ap && bp) return Math.min(a, b);
-            if (ap) return a;
-            if (bp) return b;
-            return -1f;
+            return target
+                    .add(relativeVelocity.mul(t))
+                    .add(relativeAcceleration.mul(0.5f * t * t))
+                    .sub(shooter)
+                    .norm();
         }
 
         private record Threat(Track track, float ttc, float missDistance, float score) {}
     }
 
     private static float clamp(float v, float lo, float hi) {
+        return Math.max(lo, Math.min(hi, v));
+    }
+
+    private static int clampInt(int v, int lo, int hi) {
         return Math.max(lo, Math.min(hi, v));
     }
 
