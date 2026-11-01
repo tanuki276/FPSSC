@@ -67,6 +67,11 @@ public final class MainActivity extends Activity {
         automatic = new android.widget.Switch(this);
         automatic.setText("自動操作 ON / OFF");
         automatic.setOnCheckedChangeListener((button, enabled) -> {
+            if (enabled && !AgentService.active) {
+                automatic.setChecked(false);
+                android.widget.Toast.makeText(this, "先に画面共有を開始してください", android.widget.Toast.LENGTH_LONG).show();
+                return;
+            }
             if (enabled && !TouchService.connected()) {
                 automatic.setChecked(false);
                 android.widget.Toast.makeText(this, "Android 設定で FPSSC の操作サービスを有効にしてください", android.widget.Toast.LENGTH_LONG).show();

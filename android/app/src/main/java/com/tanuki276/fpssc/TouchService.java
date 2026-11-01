@@ -1,134 +1,101 @@
 package com.tanuki276.fpssc;
 
 import android.accessibilityservice.AccessibilityService;
-import android.accessibilityservice.GestureDescription;
-import android.graphics.Path;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.util.DisplayMetrics;
 import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityNodeInfo;
 
-/** Short, nonqueued two-finger gestures. No root, shell commands, or background-app touches. */
+/** Active-window verification and bounded command delivery to the continued-gesture backend. */
 public final class TouchService extends AccessibilityService {
-    private static final String GAME = "com.supercell.brawlstars";
+    private static final String GAME="com.supercell.brawlstars";
     private static volatile TouchService instance;
     private static volatile boolean armed;
-    private volatile String foreground = "";
-    private final Handler main = new Handler(Looper.getMainLooper());
-    private boolean busy;
-    private final java.util.concurrent.atomic.AtomicBoolean pending = new java.util.concurrent.atomic.AtomicBoolean();
-    private long generation;
-    private long lastAccepted;
-    private static volatile String lastGameStatus = "まだゲームの前面イベントを受け取っていません";
+    private final Handler main=new Handler(Looper.getMainLooper());
+    private final java.util.concurrent.atomic.AtomicBoolean pending=new java.util.concurrent.atomic.AtomicBoolean();
+    private GestureEngine engine;
+    private volatile String foreground="未確認";
+    private static volatile String lastGameStatus="まだゲーム中の操作要求はありません";
     private static volatile long lastGameAt;
-    private volatile long foregroundEventAt;
-    private long acceptedCount;
-    private long completedCount;
-    private long cancelledCount;
+    static volatile String inputStatus="操作サービス未接続";
+
+    static boolean connected() { return instance!=null; }
+    static boolean isArmed() { return armed; }
+    static void arm(boolean enabled) {
+        armed=enabled&&connected();
+        inputStatus=armed?"自動操作待機中":"自動操作 OFF";
+        TouchService service=instance;
+        if(!armed&&service!=null) service.main.post(()->service.engine.stop());
+    }
+    static void pause() {
+        TouchService service=instance;
+        if(service!=null) service.main.post(()->service.engine.stop());
+    }
     static String diagnostics() {
-        TouchService service = instance;
-        long now = SystemClock.elapsedRealtime();
-        return inputStatus + "\n直近のゲーム中の状態: " + lastGameStatus
-                + (lastGameAt == 0 ? "" : " (" + (now-lastGameAt) + " ms前)")
-                + (service == null ? "" : "\n前面イベント経過=" + (now-service.foregroundEventAt)
-                + " ms 送信=" + service.acceptedCount + " 完了=" + service.completedCount + " 中断=" + service.cancelledCount);
+        TouchService s=instance;
+        GestureEngine e=s==null?null:s.engine;
+        return inputStatus+"\n直近のゲーム中: "+lastGameStatus
+                +(lastGameAt==0?"":" ("+(SystemClock.elapsedRealtime()-lastGameAt)+" ms前)")
+                +(e==null?"":"\n送信="+e.sent+" 完了="+e.completed+" 中断="+e.cancelled+" 移動継続="+e.holdingMovement());
     }
     private void gameStatus(String value) {
-        inputStatus = value;
-        lastGameStatus = value;
-        lastGameAt = SystemClock.elapsedRealtime();
+        inputStatus=value; lastGameStatus=value; lastGameAt=SystemClock.elapsedRealtime();
     }
-    static volatile String inputStatus = "操作サービス未接続";
-
-    static boolean isArmed() { return armed; }
-    static boolean connected() { return instance != null; }
-    static void arm(boolean enabled) {
-        armed = enabled && connected();
-        inputStatus = armed ? "自動操作待機中" : "自動操作 OFF";
-        if (instance != null) instance.main.post(() -> {
-            if (instance != null) instance.generation++;
-        });
-    }
-    static void submit(AgentCore.ControlCommand command, TouchProfile profile, long frameTime, int width, int height) {
-        TouchService service = instance;
-        if (service == null || !armed) return;
-        // Never enqueue an unbounded stream of old commands on the UI thread.
-        if (!service.pending.compareAndSet(false, true)) return;
-        service.main.post(() -> {
-            try { service.apply(command, profile, frameTime, width, height); }
-            finally { service.pending.set(false); }
+    static void submit(AgentCore.ControlCommand command,TouchProfile profile,long time,int width,int height) {
+        TouchService s=instance;
+        if(s==null||!armed||!s.pending.compareAndSet(false,true)) return;
+        s.main.post(()->{
+            try { s.apply(command,profile,time,width,height); }
+            finally { s.pending.set(false); }
         });
     }
     @Override protected void onServiceConnected() {
-        instance = this;
+        instance=this;
+        engine=new GestureEngine(this,()->armed&&gameActive(),message->{ arm(false); gameStatus(message); });
         arm(false);
     }
+    // Input decisions query the active window, not a cached event package from FPSSC's setup screen.
+    private boolean gameActive() {
+        AccessibilityNodeInfo root=null;
+        try {
+            root=getRootInActiveWindow();
+            foreground=root==null||root.getPackageName()==null?"ウィンドウ未取得（操作サービスを OFF/ON）":root.getPackageName().toString();
+            return GAME.equals(foreground);
+        } catch(RuntimeException e) { foreground="取得失敗"; return false; }
+        finally { if(root!=null) root.recycle(); }
+    }
     @Override public void onAccessibilityEvent(AccessibilityEvent event) {
-        if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && event.getPackageName() != null) {
-            foreground = event.getPackageName().toString();
-            foregroundEventAt = SystemClock.elapsedRealtime();
-        }
+        if(armed&&!gameActive()&&engine!=null) engine.stop();
     }
     @Override public void onInterrupt() { arm(false); }
     @Override public void onDestroy() {
-        arm(false);
-        instance = null;
-        main.removeCallbacksAndMessages(null);
+        arm(false); instance=null;
+        if(engine!=null) engine.stop();
         super.onDestroy();
     }
-    private void apply(AgentCore.ControlCommand command, TouchProfile profile, long frameTime, int width, int height) {
-        long now = SystemClock.elapsedRealtime();
-        if (!armed || busy) return;
-        if (!GAME.equals(foreground)) {
-            inputStatus = "待機: ブロスタが前面ではありません (" + foreground + ")";
-            return;
+    private void apply(AgentCore.ControlCommand command,TouchProfile profile,long time,int width,int height) {
+        if(!armed) return;
+        if(!gameActive()) {
+            inputStatus="待機: 前面アプリ="+foreground;
+            engine.stop(); return;
         }
-        if (now - frameTime > 200 || now < frameTime) {
-            gameStatus("操作保留: 判断が古い " + (now - frameTime) + " ms");
-            return;
+        long age=SystemClock.elapsedRealtime()-time;
+        if(age<0||age>200) { gameStatus("操作保留: 判断が古い "+age+" ms"); engine.stop(); return; }
+        DisplayMetrics dm=new DisplayMetrics();
+        getSystemService(android.view.WindowManager.class).getDefaultDisplay().getRealMetrics(dm);
+        if(width<=height||width!=dm.widthPixels||height!=dm.heightPixels) {
+            gameStatus("操作保留: 横画面の全画面共有で再開始してください"); engine.stop(); return;
         }
-        DisplayMetrics metrics = new DisplayMetrics();
-        getSystemService(android.view.WindowManager.class).getDefaultDisplay().getRealMetrics(metrics);
-        if (width <= height || width != metrics.widthPixels || height != metrics.heightPixels) {
-            gameStatus("停止: 横画面の全画面共有で開始してください");
-            return;
-        }
-        if (now - lastAccepted < 100) return;
-        if (profile == null) { gameStatus("操作保留: 操作ボタンの自動認識を待っています"); return; }
-        GestureDescription.Builder builder = new GestureDescription.Builder();
-        boolean movement = command.move().len() > .01f;
-        boolean fire = command.fire() && command.aim().len() > .01f;
-        if (!movement && !fire) { gameStatus("操作保留: " + command.reason()); return; }
-        if (movement) builder.addStroke(stroke(profile.moveX(), profile.moveY(), command.move(), profile.radius(), width, height));
-        if (fire) builder.addStroke(stroke(profile.attackX(), profile.attackY(), command.aim(), profile.radius(), width, height));
-        busy = true;
-        lastAccepted = now;
-        long token = ++generation;
-        try {
-            boolean accepted = dispatchGesture(builder.build(), new GestureResultCallback() {
-                @Override public void onCompleted(GestureDescription gesture) { busy = false; completedCount++; }
-                @Override public void onCancelled(GestureDescription gesture) {
-                    busy = false;
-                    cancelledCount++;
-                    if (generation == token) { armed = false; inputStatus = "操作が中断されました。再度 ON にしてください"; }
-                }
-            }, main);
-            if (!accepted) { busy = false; armed = false; inputStatus = "操作を送信できませんでした"; }
-            else { acceptedCount++; gameStatus("操作中: move=" + movement + " fire=" + fire); }
-        } catch (RuntimeException e) {
-            busy = false;
-            arm(false);
-            inputStatus = "操作エラー: " + e.getClass().getSimpleName();
-        }
+        if(profile==null) { gameStatus("操作保留: 操作ボタンを自動認識中"); engine.stop(); return; }
+        gameStatus("操作要求: move="+command.move()+" fire="+command.fire());
+        engine.offer(command,profile,time,width,height);
     }
-    private static GestureDescription.StrokeDescription stroke(float x, float y, AgentCore.Vec2 direction,
-            float radius, int width, int height) {
-        AgentCore.Vec2 vector = TouchProfile.screenVector(direction, width, height);
-        Path path = new Path();
-        path.moveTo(x * width, y * height);
-        path.lineTo(Math.max(1, Math.min(width - 1, x * width + vector.x() * radius * height)),
-                Math.max(1, Math.min(height - 1, y * height + vector.y() * radius * height)));
-        return new GestureDescription.StrokeDescription(path, 0, 90);
+    // Package-private, no exported entry point; instrumentation can test actual dispatch without spoofing a game package.
+    static TouchService instrumentationInstance() { return BuildConfig.DEBUG?instance:null; }
+    GestureEngine instrumentationEngine(java.util.function.BooleanSupplier allowed,java.util.function.Consumer<String> failure) {
+        if(!BuildConfig.DEBUG) throw new IllegalStateException("Debug tests only");
+        return new GestureEngine(this,allowed,failure);
     }
 }

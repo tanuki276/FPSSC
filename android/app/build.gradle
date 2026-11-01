@@ -5,19 +5,23 @@ plugins {
 android {
     namespace 'com.tanuki276.fpssc'
     compileSdk 35
+    buildToolsVersion '35.0.0'
 
     defaultConfig {
         applicationId 'com.tanuki276.fpssc'
         minSdk 26
         targetSdk 35
-        versionCode 3
-        versionName '0.2.1'
+        versionCode 30000
+        versionName '3.0.0'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
 
     buildFeatures { buildConfig true }
 
     buildTypes {
         release {
+            // Public research APKs use CI's test signer; configure a private release key for store distribution.
+            signingConfig signingConfigs.debug
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
@@ -29,4 +33,7 @@ android {
     }
 }
 
-dependencies { }
+dependencies {
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'junit:junit:4.13.2'
+}

@@ -77,7 +77,11 @@ final class AgentCore {
     }
 
     ControlCommand analyze(Bitmap frame, long nowMs, float captureAgeMs) {
-        WorldState state = vision.detect(frame, nowMs, captureAgeMs);
+        return analyzePixels(FramePixels.copy(frame), nowMs, captureAgeMs);
+    }
+
+    ControlCommand analyzePixels(FramePixels frame, long nowMs, float captureAgeMs) {
+        WorldState state = vision.detectPixels(frame, nowMs, captureAgeMs);
         lastState = state;
         return policy.decide(state, pipelineLatencyEwmaMs);
     }
@@ -123,6 +127,10 @@ final class AgentCore {
         }
 
         WorldState detect(Bitmap b, long nowMs, float captureAgeMs) {
+            return detectPixels(FramePixels.copy(b), nowMs, captureAgeMs);
+        }
+
+        WorldState detectPixels(FramePixels b, long nowMs, float captureAgeMs) {
             if (b == null || b.getWidth() < 96 || b.getHeight() < 96) {
                 reset();
                 return new WorldState(null, Collections.emptyList(), Collections.emptyList(), nowMs, 0f, new Vec2(0, 0), 0f);
@@ -192,7 +200,7 @@ final class AgentCore {
         }
 
         /** Brawl Stars HUD anchors: compact horizontal health fill plus white HP text above. */
-        private List<Detection> healthBars(Bitmap b) {
+        private List<Detection> healthBars(FramePixels b) {
             int w = b.getWidth(), h = b.getHeight();
             byte[] mask = new byte[w * h];
             for (int y = (int)(h * .10f); y < h * .83f; y++) {
@@ -287,7 +295,7 @@ final class AgentCore {
          * Projectiles use a denser first pass because one missed sample can erase a small object.
          */
         private List<Detection> connectedComponents(
-                Bitmap b, Kind kind,
+                FramePixels b, Kind kind,
                 float x0n, float x1n, float y0n, float y1n,
                 int max
         ) {
@@ -401,7 +409,7 @@ final class AgentCore {
             return out;
         }
 
-        private Detection refineDetection(Bitmap b, Detection coarse, int coarseStep) {
+        private Detection refineDetection(FramePixels b, Detection coarse, int coarseStep) {
             int w = b.getWidth(), h = b.getHeight();
             int cx = Math.round(coarse.pos().x() * w);
             int cy = Math.round(coarse.pos().y() * h);
@@ -493,7 +501,7 @@ final class AgentCore {
         private int[] previous;
         private int previousH;
 
-        MotionEstimate estimate(Bitmap b) {
+        MotionEstimate estimate(FramePixels b) {
             int hGrid = clampInt(Math.round(GRID_W * (b.getHeight() / (float) b.getWidth())), 44, 128);
             int[] current = sampleLuma(b, GRID_W, hGrid);
             if (previous == null || previousH != hGrid) {
@@ -530,7 +538,7 @@ final class AgentCore {
             return new MotionEstimate(shift, confidence);
         }
 
-        private int[] sampleLuma(Bitmap b, int gw, int gh) {
+        private int[] sampleLuma(FramePixels b, int gw, int gh) {
             int[] out = new int[gw * gh];
             int w = b.getWidth(), h = b.getHeight();
             for (int gy = 0; gy < gh; gy++) {

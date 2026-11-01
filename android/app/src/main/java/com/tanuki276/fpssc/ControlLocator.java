@@ -19,6 +19,9 @@ final class ControlLocator {
     private String detectionDetail = "未走査";
 
     Layout update(Bitmap frame, long nowMs, boolean inMatch) {
+        return updatePixels(FramePixels.copy(frame),nowMs,inMatch);
+    }
+    Layout updatePixels(FramePixels frame, long nowMs, boolean inMatch) {
         if (frame.getWidth() != width || frame.getHeight() != height || !inMatch) {
             clear();
             width = frame.getWidth(); height = frame.getHeight();
@@ -26,7 +29,7 @@ final class ControlLocator {
         if (!inMatch) { status = "対戦画面の認識を待っています"; return null; }
         if (nowMs - lastScanMs >= 120) {
             lastScanMs = nowMs;
-            Layout found = detect(frame);
+            Layout found = detectPixels(frame);
             if (found != null) {
                 lastVisibleMs = nowMs;
                 if (candidate != null && close(candidate.profile(), found.profile())) confirmations++;
@@ -53,7 +56,8 @@ final class ControlLocator {
         return Math.abs(a.moveX()-b.moveX()) < .02f && Math.abs(a.moveY()-b.moveY()) < .035f
                 && Math.abs(a.attackX()-b.attackX()) < .02f && Math.abs(a.attackY()-b.attackY()) < .035f;
     }
-    Layout detect(Bitmap bitmap) {
+    Layout detect(Bitmap bitmap) { return detectPixels(FramePixels.copy(bitmap)); }
+    Layout detectPixels(FramePixels bitmap) {
         int w = bitmap.getWidth(), h = bitmap.getHeight();
         if (w <= h || h < 96) { detectionDetail = "横画面ではありません"; return null; }
         List<Candidate> movement = components(bitmap, true);
@@ -68,7 +72,7 @@ final class ControlLocator {
                     Math.min(m.score(), a.score()));
         } catch (IllegalArgumentException ignored) { return null; }
     }
-    private List<Candidate> components(Bitmap b, boolean movement) {
+    private List<Candidate> components(FramePixels b, boolean movement) {
         int w = b.getWidth(), h = b.getHeight();
         int x0 = Math.round(w * (movement ? .025f : .62f));
         int x1 = Math.round(w * (movement ? .36f : .98f));

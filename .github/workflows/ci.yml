@@ -29,9 +29,73 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - run: gradle -p android assembleDebug lintDebug --no-daemon
+      - run: gradle -p android assembleDebug assembleRelease lintRelease --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: FPSSC-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+      - run: '"$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs android/app/build/outputs/apk/release/app-release.apk > android/app/build/outputs/apk/release/SIGNING-CERT.txt'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FPSSC-release-apk
+          path: |
+            android/app/build/outputs/apk/release/app-release.apk
+            android/app/build/outputs/apk/release/SIGNING-CERT.txt
+          if-no-files-found: error
+  emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: gradle -p android connectedDebugAndroidTest --no-daemon
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Android-instrumentation-results
+          path: |
+            android/app/build/reports/androidTests/
+            android/app/build/outputs/androidTest-results/
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [core, android, emulator]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: FPSSC-release-apk
+          path: release-artifact
+      - name: Publish verified 3.0.0 assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rg -F "versionName '3.0.0'" android/app/build.gradle
+          cp release-artifact/app-release.apk FPSSC-3.0.0.apk
+          cp release-artifact/SIGNING-CERT.txt SIGNING-CERT.txt
+          sha256sum FPSSC-3.0.0.apk SIGNING-CERT.txt > SHA256SUMS
+          if gh release view v3.0.0 >/dev/null 2>&1; then
+            test "$(gh api repos/$GITHUB_REPOSITORY/git/ref/tags/v3.0.0 --jq .object.sha)" = "$GITHUB_SHA"
+            exit 0
+          fi
+          gh release create v3.0.0 FPSSC-3.0.0.apk SHA256SUMS SIGNING-CERT.txt --target "$GITHUB_SHA" --title 'FPSSC 3.0.0' --notes-file docs/releases/3.0.0.md --latest

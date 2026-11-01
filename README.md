@@ -1,14 +1,14 @@
 # FPSSC
 
 Android-only screen perception and experimental touch-control app for Brawl Stars.
-Version **0.2.1** automatically locates visible movement and normal-attack controls.
+Version **3.0.0** automatically locates visible movement and normal-attack controls.
 There are no coordinate fields or save/calibration buttons.
 
 ## Install and start
 
-1. Open a successful [Validate workflow run](https://github.com/tanuki276/FPSSC/actions),
-   download the **FPSSC-debug-apk** artifact, unzip it and install `app-debug.apk`.
-2. Open FPSSC. The title should show **0.2.1**.
+1. Download `FPSSC-3.0.0.apk` from the [3.0.0 release](https://github.com/tanuki276/FPSSC/releases/tag/v3.0.0).
+   See [release notes](docs/releases/3.0.0.md) for the test signing certificate and update compatibility.
+2. Open FPSSC. The title should show **3.0.0**.
 3. Use **操作サービスを有効にする** to enable FPSSC in Android Accessibility settings.
 4. Press **画面共有を開始** in landscape and choose the entire screen.
 5. Turn **自動操作** ON and switch to the Brawl Stars practice scene.
@@ -21,13 +21,13 @@ If the app cannot recognize the scene or buttons, diagnostics include separate m
 
 ## Implementation
 
-- `AgentService`: full-display MediaProjection capture, latest-image processing,
+- `AgentService`: full-display MediaProjection capture, direct downsampled RGBA processing,
   resource lifecycle, telemetry, scene/layout/input coordination.
 - `AgentCore`: health-bar-based player/enemy detection, temporal tracking, moving
   projectile candidates and range/aim/dodge decisions.
 - `ControlLocator`: image-derived joystick centers, three-observation confirmation,
   short-occlusion tolerance, layout expiry and automatic reacquisition.
-- `TouchService`: Android AccessibilityService gesture input; at most one pending
+- `TouchService` / `GestureEngine`: active-window-verified Android AccessibilityService input with a continued movement pointer; at most one pending
   command, foreground-package gating, full-display dimension checks, age limit,
   explicit stop, and aspect-correct gesture directions.
 - `MainActivity`: start/stop, service setup, automatic-control switch and diagnostics.
@@ -45,7 +45,8 @@ Requirements: JDK 17, Gradle 8.9, Android SDK 35; .NET SDK 8 for the C# referenc
 
 ```sh
 bash scripts/test-core.sh
-gradle -p android assembleDebug lintDebug
+gradle -p android assembleDebug assembleRelease lintRelease
+gradle -p android connectedDebugAndroidTest
 dotnet run --project tests/FPSSC.Tests --configuration Release
 ```
 
@@ -61,7 +62,7 @@ output and automatic movement/attack-button centers at production analysis size.
 Synthetic tests cover relocated/scaled control artwork, red attack, false super,
 missing buttons, temporal stability, occlusion expiry and scene/resize reset.
 JVM Bitmap/Color fixtures are test-only and are never packaged into the APK.
-GitHub Actions runs regression suites, Android build/lint and APK upload.
+GitHub Actions runs regression suites, Android build/lint, emulator touch integration and APK upload. On main, publication of 3.0.0 waits for all three jobs. The release build excludes the debug-only instrumentation activity.
 
 ## Current limits
 
@@ -74,10 +75,9 @@ skins/maps, effects and HUD occlusions still need device/sequence testing.
   support arbitrary custom controls placed anywhere, invisible buttons or every
   theme. Undetected controls do not fall back to preset coordinates.
 - Health bars anchor character positions; low/hidden HP bars may be missed.
-- Input consists of 90 ms two-finger pulses, not validated continuous twin-stick
-  control. Android gesture cancellation disables automatic control.
+- Movement uses a continued pointer in 80 ms slices, with separate attack strokes. Stale input, loss of focus and stopping release the pointer. Android gesture cancellation disables automatic control. Emulator integration is not proof of Brawl Stars compatibility.
 - Menus, matchmaking, ammo management, character-specific tactics and dynamic
-  capture resizing are not implemented. Restart capture after rotating/resizing.
+  tactics are not implemented. Android 14+ capture resize callbacks rebuild the analysis surface; on older devices restart capture after rotating/resizing.
 - `queueExtra` estimates relative source queue growth. It does not measure unknown
   constant capture latency or subtract unrelated absolute clock epochs.
 

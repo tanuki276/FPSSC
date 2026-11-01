@@ -8,7 +8,6 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Intent;
-import android.graphics.Bitmap;
 import android.graphics.PixelFormat;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
@@ -23,7 +22,6 @@ import android.os.SystemClock;
 import android.util.DisplayMetrics;
 import android.util.Log;
 
-import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class AgentService extends Service {
@@ -38,10 +36,12 @@ public final class AgentService extends Service {
 
     private final AtomicBoolean processing = new AtomicBoolean(false);
     static volatile String status = "停止中";
+    static volatile boolean active;
     static volatile long statusTime;
     private AgentCore core;
     private FrameTiming frameTiming;
     private ControlLocator controlLocator;
+    private FramePixels analysisFrame;
     private MediaProjection.Callback projectionCallback;
 
     private HandlerThread captureThread;
@@ -124,6 +124,9 @@ public final class AgentService extends Service {
 
         MediaProjection session = projection;
         projectionCallback = new MediaProjection.Callback() {
+            @Override public void onCapturedContentResize(int contentWidth,int contentHeight) {
+                if(projection==session) resizeCapture(contentWidth,contentHeight);
+            }
             @Override public void onStop() {
                 if (projection == session) {
                     stopCapture();
@@ -139,6 +142,29 @@ public final class AgentService extends Service {
                 "FPSSC-capture", width, height, densityDpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 reader.getSurface(), null, captureHandler);
+        active=true;
+    }
+
+    private void resizeCapture(int newWidth,int newHeight) {
+        if(display==null||newWidth<96||newHeight<96||(newWidth==width&&newHeight==height)) return;
+        TouchService.pause();
+        ImageReader replacement=ImageReader.newInstance(newWidth,newHeight,PixelFormat.RGBA_8888,3);
+        ImageReader previous=reader;
+        try {
+            display.setSurface(null);
+            display.resize(newWidth,newHeight,densityDpi);
+            display.setSurface(replacement.getSurface());
+            reader=replacement; width=newWidth; height=newHeight;
+            reader.setOnImageAvailableListener(this::onImage,captureHandler);
+            core=new AgentCore(true); controlLocator=new ControlLocator(); frameTiming=new FrameTiming(); analysisFrame=null;
+            status="画面サイズ変更: 操作位置を再認識中";
+        } catch(RuntimeException e) {
+            replacement.close();
+            status="画面サイズ変更に失敗しました。画面共有を再開始してください";
+            stopSelf();
+        } finally {
+            if(previous!=null) { previous.setOnImageAvailableListener(null,null); previous.close(); }
+        }
     }
 
     private void onImage(ImageReader source) {
@@ -158,8 +184,6 @@ public final class AgentService extends Service {
             return;
         }
 
-        Bitmap frame = null;
-        Bitmap scaled = null;
         long callbackAt = SystemClock.elapsedRealtime();
         try {
             long imageAgeMs = frameTiming.observe(image.getTimestamp(), callbackAt);
@@ -170,19 +194,16 @@ public final class AgentService extends Service {
             }
 
             long convertStart = SystemClock.elapsedRealtime();
-            frame = imageToBitmap(image);
-            if (frame == null) return;
-
-            int targetWidth = Math.min(ANALYSIS_WIDTH, frame.getWidth());
-            int targetHeight = Math.max(1, Math.round(frame.getHeight() * (targetWidth / (float) frame.getWidth())));
-            scaled = frame.getWidth() == targetWidth
-                    ? frame
-                    : Bitmap.createScaledBitmap(frame, targetWidth, targetHeight, false);
+            Image.Plane[] planes=image.getPlanes();
+            if(planes.length==0) return;
+            Image.Plane plane=planes[0];
+            analysisFrame=FramePixels.sampleRgba(plane.getBuffer(),image.getWidth(),image.getHeight(),
+                    plane.getPixelStride(),plane.getRowStride(),ANALYSIS_WIDTH,analysisFrame);
             long convertEnd = SystemClock.elapsedRealtime();
 
             long visionStart = SystemClock.elapsedRealtime();
-            AgentCore.ControlCommand command = core.analyze(scaled, visionStart, imageAgeMs);
-            ControlLocator.Layout layout = controlLocator.update(scaled, visionStart, core.hasObservedPlayer());
+            AgentCore.ControlCommand command = core.analyzePixels(analysisFrame, visionStart, imageAgeMs);
+            ControlLocator.Layout layout = controlLocator.updatePixels(analysisFrame, visionStart, core.hasObservedPlayer());
             TouchService.submit(command, layout == null ? null : layout.profile(), callbackAt - imageAgeMs, width, height);
             long end = SystemClock.elapsedRealtime();
             long visionMs = end - visionStart;
@@ -208,7 +229,7 @@ public final class AgentService extends Service {
                     + " visionMs=" + visionMs
                     + " totalMs=" + totalMs
                     + " dropped=" + droppedFrames
-                    + " size=" + scaled.getWidth() + "x" + scaled.getHeight()
+                    + " size=" + analysisFrame.getWidth() + "x" + analysisFrame.getHeight()
                     + " " + core.telemetry());
 
             if (frameCount % 8 == 0 && (android.os.Build.VERSION.SDK_INT < 33
@@ -221,42 +242,8 @@ public final class AgentService extends Service {
             status = "解析エラー: " + t.getClass().getSimpleName();
             Log.e("FPSSC", "frame failed", t);
         } finally {
-            if (scaled != null && scaled != frame) scaled.recycle();
-            if (frame != null) frame.recycle();
             image.close();
             processing.set(false);
-        }
-    }
-
-    private Bitmap imageToBitmap(Image image) {
-        Image.Plane[] planes = image.getPlanes();
-        if (planes.length == 0) return null;
-        Image.Plane plane = planes[0];
-        ByteBuffer buffer = plane.getBuffer();
-        int pixelStride = plane.getPixelStride();
-        int rowStride = plane.getRowStride();
-        int imageWidth = image.getWidth();
-        int imageHeight = image.getHeight();
-        if (pixelStride != 4) throw new IllegalStateException("Unsupported RGBA pixel stride: " + pixelStride);
-        int rowBytes = Math.multiplyExact(imageWidth, pixelStride);
-        ByteBuffer packed = ByteBuffer.allocate(Math.multiplyExact(rowBytes, imageHeight));
-        int origin = buffer.position();
-        // The last row need not include padding; copy only actual image pixels.
-        for (int y = 0; y < imageHeight; y++) {
-            ByteBuffer row = buffer.duplicate();
-            int start = Math.addExact(origin, Math.multiplyExact(y, rowStride));
-            row.limit(Math.addExact(start, rowBytes));
-            row.position(start);
-            packed.put(row);
-        }
-        packed.flip();
-        Bitmap bitmap = Bitmap.createBitmap(imageWidth, imageHeight, Bitmap.Config.ARGB_8888);
-        try {
-            bitmap.copyPixelsFromBuffer(packed);
-            return bitmap;
-        } catch (RuntimeException e) {
-            bitmap.recycle();
-            throw e;
         }
     }
 
@@ -284,6 +271,7 @@ public final class AgentService extends Service {
     }
 
     private void stopCapture() {
+        active=false;
         TouchService.arm(false);
         ImageReader oldReader = reader;
         VirtualDisplay oldDisplay = display;
@@ -294,6 +282,7 @@ public final class AgentService extends Service {
         projection = null;
         projectionCallback = null;
         core = null;
+        analysisFrame = null;
         status = "停止中";
         if (oldReader != null) release("image listener", () -> oldReader.setOnImageAvailableListener(null, null));
         if (oldDisplay != null) release("virtual display", oldDisplay::release);

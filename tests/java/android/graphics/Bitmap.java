@@ -12,5 +12,8 @@ public final class Bitmap {
     public int getWidth() { return width; }
     public int getHeight() { return height; }
     public int getPixel(int x, int y) { return pixels[y * width + x]; }
+    public void getPixels(int[] output,int offset,int stride,int x,int y,int w,int h) {
+        for(int row=0;row<h;row++) System.arraycopy(pixels,(y+row)*width+x,output,offset+row*stride,w);
+    }
     public void setPixel(int x, int y, int color) { pixels[y * width + x] = color; }
 }
