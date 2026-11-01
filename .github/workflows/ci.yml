@@ -66,7 +66,8 @@ jobs:
           arch: x86_64
           target: google_apis
           disable-animations: true
-          script: gradle -p android connectedDebugAndroidTest --no-daemon
+          script: |
+            set +e; gradle -p android connectedDebugAndroidTest --no-daemon; result=$?; adb logcat -d -t 2500 > android/emulator-logcat.txt; adb shell dumpsys accessibility > android/emulator-accessibility.txt; exit $result
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -74,6 +75,8 @@ jobs:
           path: |
             android/app/build/reports/androidTests/
             android/app/build/outputs/androidTest-results/
+            android/emulator-logcat.txt
+            android/emulator-accessibility.txt
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [core, android, emulator]

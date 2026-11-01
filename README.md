@@ -76,8 +76,7 @@ skins/maps, effects and HUD occlusions still need device/sequence testing.
   theme. Undetected controls do not fall back to preset coordinates.
 - Health bars anchor character positions; low/hidden HP bars may be missed.
 - Movement uses a continued pointer in 80 ms slices, with separate attack strokes. Stale input, loss of focus and stopping release the pointer. Android gesture cancellation disables automatic control. Emulator integration is not proof of Brawl Stars compatibility.
-- Menus, matchmaking, ammo management, character-specific tactics and dynamic
-  tactics are not implemented. Android 14+ capture resize callbacks rebuild the analysis surface; on older devices restart capture after rotating/resizing.
+- Menus, matchmaking, ammo management and character-specific tactics are not implemented. Android 14+ capture resize callbacks rebuild the analysis surface; on older devices restart capture after rotating/resizing.
 - `queueExtra` estimates relative source queue growth. It does not measure unknown
   constant capture latency or subtract unrelated absolute clock epochs.
 

@@ -52,6 +52,7 @@ public final class TouchService extends AccessibilityService {
         });
     }
     @Override protected void onServiceConnected() {
+        android.util.Log.i("FPSSC","touch service connected pid="+android.os.Process.myPid());
         instance=this;
         engine=new GestureEngine(this,()->armed&&gameActive(),message->{ arm(false); gameStatus(message); });
         arm(false);

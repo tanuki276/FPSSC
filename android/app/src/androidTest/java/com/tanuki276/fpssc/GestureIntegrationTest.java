@@ -32,15 +32,19 @@ public final class GestureIntegrationTest {
         GestureTestActivity activity=null;
         AtomicReference<GestureEngine> engine=new AtomicReference<>();
         try {
-            String component="com.tanuki276.fpssc/com.tanuki276.fpssc.TouchService";
-            shell("settings put secure enabled_accessibility_services "+quoted(previous.equals("null")?component:previous+":"+component));
-            shell("settings put secure accessibility_enabled 1");
-            long deadline=SystemClock.elapsedRealtime()+10000;
-            while(TouchService.instrumentationInstance()==null&&SystemClock.elapsedRealtime()<deadline) SystemClock.sleep(100);
-            assertNotNull("Accessibility service did not connect",TouchService.instrumentationInstance());
             activity=(GestureTestActivity)instrumentation.startActivitySync(new Intent(instrumentation.getTargetContext(),GestureTestActivity.class)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             SystemClock.sleep(800);
+            String component="com.tanuki276.fpssc/com.tanuki276.fpssc.TouchService";
+            shell("settings put secure enabled_accessibility_services "+quoted(previous.equals("null")?component:previous+":"+component));
+            shell("settings put secure accessibility_enabled 1");
+            long deadline=SystemClock.elapsedRealtime()+15000;
+            while(TouchService.instrumentationInstance()==null&&SystemClock.elapsedRealtime()<deadline) SystemClock.sleep(100);
+            if(TouchService.instrumentationInstance()==null) {
+                System.err.println("ACCESSIBILITY STATE: "+shell("dumpsys accessibility"));
+                System.err.println("SERVICE LOG: "+shell("logcat -d -s FPSSC AndroidRuntime"));
+            }
+            assertNotNull("Accessibility service did not connect",TouchService.instrumentationInstance());
             instrumentation.runOnMainSync(GestureTestActivity::reset);
             DisplayMetrics dm=new DisplayMetrics();
             activity.getWindowManager().getDefaultDisplay().getRealMetrics(dm);
