@@ -39,6 +39,7 @@ final class GestureEngine {
         if(c==null||age<0||age>200||!allowed.getAsBoolean()) { latest=null; release(); return; }
         boolean moving=c.controls().move().len()>.01f,fire=c.controls().fire()&&c.controls().aim().len()>.01f;
         if(!moving&&!fire) { release(); return; }
+        boolean continuing=movement!=null;
         GestureDescription.Builder builder=new GestureDescription.Builder();
         GestureDescription.StrokeDescription nextMovement=null;
         if(moving) {
@@ -58,7 +59,10 @@ final class GestureEngine {
             Path path=new Path(); path.moveTo(c.profile().attackX()*c.width(),c.profile().attackY()*c.height());
             path.lineTo(clip(c.profile().attackX()*c.width()+v.x()*c.profile().radius()*c.height(),c.width()),
                     clip(c.profile().attackY()*c.height()+v.y()*c.profile().radius()*c.height(),c.height()));
-            builder.addStroke(new GestureDescription.StrokeDescription(path,0,SLICE_MS,false));
+            // Android 11's MotionEventInjector requires the first step of a continuation
+            // to contain only continued pointers. Add a new attack pointer one ms later.
+            long start=continuing?1:0;
+            builder.addStroke(new GestureDescription.StrokeDescription(path,start,SLICE_MS-start,false));
         }
         movement=nextMovement;
         dispatch(builder.build(),true);

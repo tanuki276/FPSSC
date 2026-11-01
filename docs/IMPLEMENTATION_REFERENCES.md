@@ -30,3 +30,13 @@ repository. Separate synthetic tests move and resize the controls and check
 missing attack, red attack, super-button rejection, stability, expiry, conflicting
 positions, scene transitions and resize invalidation. This is still not a
 substitute for device and recorded-sequence validation.
+
+## Android continuation compatibility
+
+Reviewed Android 11's [MotionEventInjector.prepareToContinueOldGesture](https://github.com/aosp-mirror/platform_frameworks_base/blob/android11-release/services/accessibility/java/com/android/server/accessibility/MotionEventInjector.java)
+after emulator integration exposed gesture cancellation. Its initial-step pointer
+count requires the first step of a continuation to contain only the previously
+held pointers. `GestureEngine` starts a new attack pointer 1 ms after the continued
+movement pointer, keeping both in the same 80 ms gesture. The Android integration
+test asserts one movement DOWN, repeated attacks, two-pointer delivery and final
+release; it does not merely check that dispatchGesture returns true.

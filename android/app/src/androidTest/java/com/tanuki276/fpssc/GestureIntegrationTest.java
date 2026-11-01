@@ -65,7 +65,7 @@ public final class GestureIntegrationTest {
             allowed.set(false);
             instrumentation.runOnMainSync(()->engine.get().stop());
             SystemClock.sleep(300);
-            assertNull("Gesture engine failure",failure.get());
+            assertNull("Gesture engine failure: sent="+engine.get().sent+" completed="+engine.get().completed+" cancelled="+engine.get().cancelled,failure.get());
             assertEquals("Movement restarted instead of continuing",1,GestureTestActivity.leftDowns);
             assertTrue("Attack strokes missing",GestureTestActivity.attackDowns>=2);
             assertTrue("Two fingers were not delivered",GestureTestActivity.maxPointers>=2);
