@@ -100,7 +100,25 @@ final class ControlLocator {
             }
             int bw=maxX-minX+1,bh=maxY-minY+1;
             float ratio=bw/(float)bh, fill=tail/(float)(bw*bh);
-            if(bw<h*.06f||bh<h*.06f||bw>h*.24f||bh>h*.24f||ratio<.72f||ratio>1.35f||fill<.48f) continue;
+            if(bw<h*.06f||bh<h*.06f||bw>h*.40f||bh>h*.40f||ratio<.72f||ratio>1.35f) continue;
+            if (fill < .48f) {
+                // Idle joysticks may show a hollow rim instead of a filled thumb pad.
+                boolean[] sectors = new boolean[24];
+                int onRim = 0;
+                float centerX=(minX+maxX)/2f, centerY=(minY+maxY)/2f;
+                for (int i=0;i<tail;i++) {
+                    float dx=(queue[i]%rw-centerX)/(bw/2f), dy=(queue[i]/rw-centerY)/(bh/2f);
+                    float distance=(float)Math.sqrt(dx*dx+dy*dy);
+                    if (distance > .72f && distance < 1.12f) {
+                        onRim++;
+                        int sector=Math.min(23,(int)((Math.atan2(dy,dx)+Math.PI)/(2*Math.PI)*24));
+                        sectors[sector]=true;
+                    }
+                }
+                int coverage=0;
+                for(boolean sector:sectors) if(sector) coverage++;
+                if(coverage<20 || onRim<tail*.80f || fill<.045f) continue;
+            }
             float cx=x0+(minX+maxX)/2f,cy=y0+(minY+maxY)/2f,rad=(bw+bh)/4f;
             int white=0,count=0;
             for(int y=Math.max(0,Math.round(cy-rad*.55f));y<=Math.min(h-1,cy+rad*.55f);y++)

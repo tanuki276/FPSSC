@@ -44,6 +44,10 @@ public final class ControlLocatorTest {
         check(changed.update(shifted,1480,true)==null,"new position needs stability");
         check(changed.update(shifted,1600,true)!=null,"new layout not reacquired");
         check(changed.update(scene(960,450,.11f,.82f,.82f,.58f,true),1720,true)==null,"resize must invalidate lock");
+        Bitmap rings = new Bitmap(640,300);
+        circle(rings,96,225,38,0xff287f9a); circle(rings,96,225,35,0xff000000);
+        circle(rings,550,180,37,0xffbc8038); circle(rings,550,180,34,0xff000000);
+        check(l.detect(rings)!=null,"hollow idle joystick rims must be recognized");
         System.out.println("ControlLocator: "+checks+" regression checks passed");
     }
 }
