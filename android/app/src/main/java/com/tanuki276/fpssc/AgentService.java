@@ -29,6 +29,10 @@ public final class AgentService extends Service {
     private static final String CHANNEL = "fpssc_agent";
     private static final int NOTIFICATION_ID = 2761;
 
+    // 640px keeps small projectiles materially clearer than the old 480px analysis frame,
+    // while still being much cheaper than running the detector over the native screenshot.
+    private static final int ANALYSIS_WIDTH = 640;
+
     private final AtomicBoolean processing = new AtomicBoolean(false);
     private final AgentCore core = new AgentCore();
 
@@ -40,6 +44,8 @@ public final class AgentService extends Service {
     private int width;
     private int height;
     private int densityDpi;
+    private long frameCount;
+    private long droppedFrames;
 
     @Override
     public void onCreate() {
@@ -97,35 +103,48 @@ public final class AgentService extends Service {
         Image image = source.acquireLatestImage();
         if (image == null) return;
         if (!processing.compareAndSet(false, true)) {
+            droppedFrames++;
             image.close();
             return;
         }
 
         Bitmap frame = null;
         Bitmap scaled = null;
-        long start = SystemClock.elapsedRealtime();
+        long captureAt = SystemClock.elapsedRealtime();
         try {
+            long convertStart = SystemClock.elapsedRealtime();
             frame = imageToBitmap(image);
             if (frame == null) return;
 
-            int targetWidth = Math.min(480, frame.getWidth());
+            int targetWidth = Math.min(ANALYSIS_WIDTH, frame.getWidth());
             int targetHeight = Math.max(1, Math.round(frame.getHeight() * (targetWidth / (float) frame.getWidth())));
-            scaled = frame.getWidth() == targetWidth ? frame : Bitmap.createScaledBitmap(frame, targetWidth, targetHeight, false);
+            scaled = frame.getWidth() == targetWidth
+                    ? frame
+                    : Bitmap.createScaledBitmap(frame, targetWidth, targetHeight, false);
+            long convertEnd = SystemClock.elapsedRealtime();
 
             long visionStart = SystemClock.elapsedRealtime();
             AgentCore.ControlCommand command = core.analyze(scaled, visionStart);
             long end = SystemClock.elapsedRealtime();
+            frameCount++;
 
-            // Intentionally preview-only: no system-wide touch injection is performed here.
-            Log.i("FPSSC", "command move=" + command.move()
+            // Preview-only: no system-wide touch injection is performed here.
+            Log.i("FPSSC", "frame=" + frameCount
+                    + " move=" + command.move()
                     + " aim=" + command.aim()
                     + " fire=" + command.fire()
                     + " reason=" + command.reason()
-                    + " frameMs=" + (end - start));
+                    + " convertMs=" + (convertEnd - convertStart)
+                    + " visionMs=" + (end - visionStart)
+                    + " totalMs=" + (end - captureAt)
+                    + " dropped=" + droppedFrames
+                    + " size=" + scaled.getWidth() + "x" + scaled.getHeight());
 
-            getSystemService(NotificationManager.class).notify(
-                    NOTIFICATION_ID,
-                    notification(command.reason() + " · " + (end - visionStart) + "ms"));
+            if (frameCount % 8 == 0) {
+                getSystemService(NotificationManager.class).notify(
+                        NOTIFICATION_ID,
+                        notification(command.reason() + " · vision " + (end - visionStart) + "ms"));
+            }
         } catch (Throwable t) {
             Log.e("FPSSC", "frame failed", t);
         } finally {
