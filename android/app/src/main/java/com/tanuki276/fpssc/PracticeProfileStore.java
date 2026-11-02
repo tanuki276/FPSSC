@@ -10,6 +10,14 @@ final class PracticeProfileStore {
 
     private PracticeProfileStore() {}
 
+    static boolean followsTeammate(Context c) {
+        return c.getSharedPreferences(PREFS,Context.MODE_PRIVATE).getBoolean("follow_teammate",true);
+    }
+    static void setFollowTeammate(Context c, boolean follow) {
+        TouchService.arm(false);
+        c.getSharedPreferences(PREFS,Context.MODE_PRIVATE).edit().putBoolean("follow_teammate",follow).apply();
+    }
+
     static BrawlerProfile selected(Context context) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         return BrawlerProfile.byId(prefs.getString(KEY_PROFILE, BrawlerProfile.DEFAULT_ID));

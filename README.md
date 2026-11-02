@@ -1,24 +1,26 @@
 # FSCSR
 
 Android-only screen perception and experimental touch-control app for Brawl Stars.
-Version **5.1.0** connects profile-specific combat to actual Android touch commands:
-predictive aiming, range control, multi-projectile evasion, short-horizon planning,
-and shot-feedback-based ammo estimates. Temporal crate/bush/motion output remains diagnostic.
-Visible movement and normal-attack controls are located automatically.
+Version **5.2.0** adds a movement-only teammate-follow mode (default) and a manual pin window.
+Blue HP anchors identify allies; follow confirms and keeps one target, stops nearby or when lost,
+and routes around recognized terrain. Combat remains available as a separate mode.
+Press **ピンズ** to yield all automated touches, select a pin in the game, then **再開**.
+Follow stays enabled during manual pins; it never resumes on a timer.
 There are no coordinate fields or save/calibration buttons.
 
 ## Install and start
 
-1. Download `FSCSR-5.1.0.apk` from the [5.1.0 release](https://github.com/tanuki276/FPSSC/releases/tag/v5.1.0).
-   See [release notes](docs/releases/5.1.0.md) for the test signing certificate and update compatibility.
-2. Open FSCSR. The title should show **5.1.0**.
+1. Download `FSCSR-5.2.0.apk` from the [5.2.0 release](https://github.com/tanuki276/FPSSC/releases/tag/v5.2.0).
+   See [release notes](docs/releases/5.2.0.md) for the test signing certificate and update compatibility.
+2. Open FSCSR. The title should show **5.2.0**.
 3. Use **操作サービスを有効にする** to enable FSCSR in Android Accessibility settings.
 4. Press **画面共有を開始** in landscape and choose the entire screen.
-5. Choose the matching combat profile on the setup screen (saved on device). The overlay character chip advances on tap and goes back on long press. This selection now changes live range, projectile speed, spacing and shot cadence.
-6. Switch to the Brawl Stars practice scene and press **AI OFF** in the transparent upper-left panel to turn it ON. **診断 ＋/−** expands or compacts diagnostics; the text region passes touches through.
+5. Choose **味方追従** (default) or **戦闘**. Changing mode turns automation OFF. For combat, choose the matching combat profile on the setup screen (saved on device). The overlay character chip advances on tap and goes back on long press. This selection now changes live range, projectile speed, spacing and shot cadence.
+6. Switch to a team match with visible allied blue HP bars (or a practice scene for combat) and press **AI OFF** in the transparent upper-left panel to turn it ON. **診断 ＋/−** expands or compacts diagnostics; the text region passes touches through.
 7. Once the player and visible joystick artwork are recognized, the app acquires
    movement/attack centers automatically. Positions must agree across three scans.
-8. Stop from the persistent notification's **停止** action or FSCSR's **停止** button.
+8. During follow, use **ピンズ** to pause movement and select pins manually in the game. Press **再開** when finished. A manual touch that cancels follow also enters this pause; no automatic resume interrupts held touches.
+9. Stop from the persistent notification's **停止** action or FSCSR's **停止** button.
 
 Automatic control starts OFF. Old saved coordinate preferences are ignored.
 If the app cannot recognize the scene or buttons, diagnostics include separate movement/attack candidate counts. The last game-foreground input status and gesture sent/completed/cancelled counters remain visible when returning to FSCSR. **診断結果を共有** includes perception and input status.
@@ -38,6 +40,10 @@ If the app cannot recognize the scene or buttons, diagnostics include separate m
 - `MainActivity`: start/stop, service setup, persistent combat-profile selector and diagnostics.
 - `PracticeVisionDiagnostics`: temporal crate-like and moving-object candidates, bush coverage,
   confidence, and global scene-change suppression; diagnostics only.
+- `TeammateFollower`: blue-HP ally tracks, three-observation target acquisition, sticky identity,
+  distance hysteresis, observed-only movement and terrain routing. Never fires.
+- `ManualInputGate`: explicit manual pause/resume shared by capture and input; preserves armed
+  follow mode while yielding the screen for pins.
 - `LiveCombatController`: connects `AgentCore` perception to profile-aware combat, camera-aware
   target memory, bounded latency prediction, shootable-target selection and terrain routing.
 - `PracticeCombatPolicy`, `PracticeOpponentModel`, `PracticeTacticalPlanner`: shared live/test
@@ -76,9 +82,16 @@ output and automatic movement/attack-button centers at production analysis size.
 Synthetic tests cover relocated/scaled control artwork, red attack, false super,
 missing buttons, temporal stability, occlusion expiry and scene/resize reset.
 JVM Bitmap/Color fixtures are test-only and are never packaged into the APK.
-GitHub Actions runs regression suites, Android build/lint, emulator touch integration and APK upload. On main, publication of 5.1.0 waits for all three jobs. The release build excludes the debug-only instrumentation activity.
+GitHub Actions runs regression suites, Android build/lint, emulator touch integration and APK upload. On main, publication of 5.2.0 waits for all three jobs. The release build excludes the debug-only instrumentation activity.
 
 ## Current limits
+
+- Teammate follow recognizes blue HP fill with white HP text and a dark border. It cannot follow
+  enemies in solo modes or allies whose HUD is hidden/occluded. It stops when the target is lost.
+  Nearest confirmed ally is selected automatically and kept until lost; global pathfinding is absent.
+- Android accessibility injection cancels in-progress physical gestures. Pins are therefore manual
+  during an explicit movement pause, not simultaneous with a held automated joystick. Use **再開**
+  after selecting a pin. No pin artwork/coordinates are assumed and no pins are sent automatically.
 
 This is still experimental, not a device-validated autonomous player. The supplied
 static practice screenshot is recognized; Brawl Stars touch behavior, movement sequences,

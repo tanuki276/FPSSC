@@ -19,6 +19,7 @@ public final class MainActivity extends Activity {
     private android.widget.Switch automatic;
     private Spinner profileSpinner;
     private boolean profileReady;
+    private Button mode,pins,resume;
 
     private final Runnable refresh = new Runnable() {
         @Override public void run() {
@@ -26,6 +27,8 @@ public final class MainActivity extends Activity {
                     +AgentService.status + "\n" + TouchService.diagnostics());
             if (automatic != null && automatic.isChecked() != TouchService.isArmed())
                 automatic.setChecked(TouchService.isArmed());
+            if(mode!=null) mode.setText(PracticeProfileStore.followsTeammate(MainActivity.this)?"モード: 味方追従":"モード: 戦闘");
+            if(pins!=null) { resume.setEnabled(TouchService.manualPaused() && TouchService.isArmed()); pins.setEnabled(TouchService.isArmed() && PracticeProfileStore.followsTeammate(MainActivity.this)); }
             ui.postDelayed(this, 500);
         }
     };
@@ -46,6 +49,21 @@ public final class MainActivity extends Activity {
         title.setText("FSCSR " + BuildConfig.VERSION_NAME + "\n実戦プロファイル / 認識診断");
         title.setTextSize(22f);
         root.addView(title);
+
+        mode=new Button(this);
+        mode.setText(PracticeProfileStore.followsTeammate(this)?"モード: 味方追従":"モード: 戦闘");
+        mode.setOnClickListener(v->{
+            PracticeProfileStore.setFollowTeammate(this,!PracticeProfileStore.followsTeammate(this));
+            mode.setText(PracticeProfileStore.followsTeammate(this)?"モード: 味方追従":"モード: 戦闘");
+        });
+        root.addView(mode);
+        pins=new Button(this); pins.setText("ピンズを手動操作");
+        pins.setOnClickListener(v->TouchService.pauseForPins()); root.addView(pins);
+        resume=new Button(this); resume.setText("追従再開");
+        resume.setOnClickListener(v->TouchService.resumeFollowing()); root.addView(resume);
+        TextView followHelp=new TextView(this);
+        followHelp.setText("味方追従は青いHP表示の味方へ移動だけを行います。近づいたら停止。ピンズは上部の『ピンズ』で移動を一時停止し、選択後『追従再開』。手動タッチで中断した場合も再開を押してください。モード変更時は自動操作がOFFになります。");
+        root.addView(followHelp);
 
         TextView profileTitle=new TextView(this);
         profileTitle.setText("キャラクター / 戦闘プロファイル");

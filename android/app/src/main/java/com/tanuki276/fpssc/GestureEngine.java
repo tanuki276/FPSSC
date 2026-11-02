@@ -16,6 +16,7 @@ final class GestureEngine {
     private final AccessibilityService service;
     private final BooleanSupplier allowed;
     private final Consumer<String> failure;
+    private final Runnable interrupted;
     private final Handler main=new Handler(Looper.getMainLooper());
     private Command latest;
     private boolean busy;
@@ -26,7 +27,10 @@ final class GestureEngine {
     long sent,completed,cancelled;
     volatile long attacksSent;
     GestureEngine(AccessibilityService service,BooleanSupplier allowed,Consumer<String> failure) {
-        this.service=service; this.allowed=allowed; this.failure=failure;
+        this(service,allowed,failure,()->failure.accept("タッチ操作が中断されました。自動操作を再度 ON にしてください"));
+    }
+    GestureEngine(AccessibilityService service,BooleanSupplier allowed,Consumer<String> failure,Runnable interrupted) {
+        this.service=service; this.allowed=allowed; this.failure=failure; this.interrupted=interrupted;
     }
     void offer(AgentCore.ControlCommand command,TouchProfile profile,long time,int width,int height) {
         latest=new Command(command,profile,time,width,height);
@@ -98,7 +102,7 @@ final class GestureEngine {
                 @Override public void onCancelled(GestureDescription ignored) {
                     if(token!=sequence) return;
                     busy=false; cancelled++; movement=null; latest=null;
-                    failure.accept("タッチ操作が中断されました。自動操作を再度 ON にしてください");
+                    interrupted.run();
                 }
             },main);
             if(!accepted) { busy=false; movement=null; latest=null; failure.accept("タッチ操作を送信できませんでした"); }

@@ -16,6 +16,8 @@ java -m jdk.compiler/com.sun.tools.javac.Main -d "$build_dir" \
     android/app/src/main/java/com/tanuki276/fpssc/PracticeOpponentModel.java \
     android/app/src/main/java/com/tanuki276/fpssc/PracticeTacticalPlanner.java \
     android/app/src/main/java/com/tanuki276/fpssc/PracticeVisionDiagnostics.java \
+    android/app/src/main/java/com/tanuki276/fpssc/TeammateFollower.java \
+    android/app/src/main/java/com/tanuki276/fpssc/ManualInputGate.java \
     android/app/src/main/java/com/tanuki276/fpssc/LiveCombatController.java \
     android/app/src/main/java/com/tanuki276/fpssc/PracticeCombatPolicy.java "${fixtures[@]}"
 java -cp "$build_dir" com.tanuki276.fpssc.AgentCoreTest
@@ -32,6 +34,7 @@ java -cp "$build_dir" com.tanuki276.fpssc.PracticeCombatStressTest
 java -cp "$build_dir" com.tanuki276.fpssc.PracticeVisionDiagnosticsTest
 java -cp "$build_dir" com.tanuki276.fpssc.LiveCombatControllerTest
 java -cp "$build_dir" com.tanuki276.fpssc.LiveCombatDuelTest
+java -cp "$build_dir" com.tanuki276.fpssc.TeammateFollowerTest
 if [[ $# -gt 0 ]]; then
     java -cp "$build_dir" com.tanuki276.fpssc.ScreenshotRegressionTest "$@"
 fi

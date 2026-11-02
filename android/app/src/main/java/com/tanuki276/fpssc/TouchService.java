@@ -13,6 +13,7 @@ public final class TouchService extends AccessibilityService {
     private static final String GAME="com.supercell.brawlstars";
     private static volatile TouchService instance;
     private static volatile boolean armed;
+    private static final ManualInputGate manual=new ManualInputGate();
     private final Handler main=new Handler(Looper.getMainLooper());
     private final java.util.concurrent.atomic.AtomicBoolean pending=new java.util.concurrent.atomic.AtomicBoolean();
     private GestureEngine engine;
@@ -28,8 +29,18 @@ public final class TouchService extends AccessibilityService {
     }
     static boolean connected() { return instance!=null; }
     static boolean isArmed() { return armed; }
+    static boolean manualPaused() { return manual.paused(); }
+    static boolean canAutomate() { return manual.allows(armed); }
+    static void pauseForPins() {
+        if(!armed) return;
+        manual.pause(); pause();
+        inputStatus="手動操作中: ピンズを選んだら『追従再開』";
+    }
+    static void resumeFollowing() { manual.resume(); inputStatus="追従再開・味方を確認中"; }
+
     static void arm(boolean enabled) {
         armed=enabled&&connected();
+        if(!armed) manual.resume();
         inputStatus=armed?"自動操作待機中":"自動操作 OFF";
         TouchService service=instance;
         if(!armed&&service!=null) service.main.post(()->service.engine.stop());
@@ -58,7 +69,11 @@ public final class TouchService extends AccessibilityService {
     }
     @Override protected void onServiceConnected() {
         android.util.Log.i("FSCSR","touch service connected pid="+android.os.Process.myPid());
-        engine=new GestureEngine(this,()->armed&&gameActive(),message->{ arm(false); gameStatus(message); });
+        engine=new GestureEngine(this,()->canAutomate()&&gameActive(),
+                message->{ arm(false); gameStatus(message); },()->{
+                    if(armed && PracticeProfileStore.followsTeammate(this)) pauseForPins();
+                    else { arm(false); gameStatus("タッチ操作が中断されました。再度 ON にしてください"); }
+                });
         arm(false);
         overlay=new GameOverlay(this);
         overlay.show();
@@ -93,7 +108,7 @@ public final class TouchService extends AccessibilityService {
         super.onDestroy();
     }
     private void apply(AgentCore.ControlCommand command,TouchProfile profile,long time,int width,int height) {
-        if(!armed) return;
+        if(!canAutomate()) { engine.stop(); return; }
         if(!gameActive()) {
             inputStatus="待機: 前面アプリ="+foreground;
             engine.stop(); return;
@@ -110,9 +125,14 @@ public final class TouchService extends AccessibilityService {
         engine.offer(command,profile,time,width,height);
     }
     int[] instrumentationOverlayToggleCenter() { return BuildConfig.DEBUG && overlay!=null ? overlay.toggleCenter() : null; }
+    int[] instrumentationPinsCenter() { return BuildConfig.DEBUG && overlay!=null ? overlay.pinsCenter() : null; }
     boolean overlayVisible() { return overlay!=null && overlay.visible(); }
     // Package-private, no exported entry point; instrumentation can test actual dispatch without spoofing a game package.
     static TouchService instrumentationInstance() { return BuildConfig.DEBUG?instance:null; }
+    GestureEngine instrumentationFollowEngine(java.util.function.BooleanSupplier allowed,java.util.function.Consumer<String> failure) {
+        if(!BuildConfig.DEBUG) throw new IllegalStateException("Debug tests only");
+        return new GestureEngine(this,allowed,failure,TouchService::pauseForPins);
+    }
     GestureEngine instrumentationEngine(java.util.function.BooleanSupplier allowed,java.util.function.Consumer<String> failure) {
         if(!BuildConfig.DEBUG) throw new IllegalStateException("Debug tests only");
         return new GestureEngine(this,allowed,failure);

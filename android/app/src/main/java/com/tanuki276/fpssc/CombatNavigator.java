@@ -47,6 +47,7 @@ final class CombatNavigator {
         }
         // Character artwork can share a wall palette; never classify its immediate body as terrain.
         java.util.ArrayList<Track> actors=new java.util.ArrayList<>(world.enemies());
+        actors.addAll(world.allies());
         if(world.player()!=null) actors.add(world.player());
         for(Track actor:actors) {
             if(!actor.observed()) continue;
