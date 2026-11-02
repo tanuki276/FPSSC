@@ -8,8 +8,9 @@ import java.util.Map;
 
 /**
  * Practice/simulation combat controller. This policy remains detached from the live input backend.
- * It focuses on deterministic training-quality decisions: target memory, range control, predictive
- * aiming, ammo pacing, multi-projectile evasion, and conservative ability recommendations.
+ * It focuses on deterministic training-quality decisions: target memory, adaptive opponent motion
+ * modeling, range control, predictive aiming, ammo pacing, multi-projectile evasion, and
+ * conservative ability recommendations.
  */
 final class PracticeCombatPolicy {
     record Action(
@@ -49,9 +50,11 @@ final class PracticeCombatPolicy {
             long lastSeenMs
     ) {}
 
+    private record AimSolution(AgentCore.Vec2 direction, float modelQuality, float uncertainty) {}
     private record DodgeCandidate(AgentCore.Vec2 direction, float score) {}
 
     private final Map<Integer, Memory> enemyMemory = new HashMap<>();
+    private final PracticeOpponentModel opponentModel = new PracticeOpponentModel();
     private BrawlerProfile profile = BrawlerProfile.byId(BrawlerProfile.DEFAULT_ID);
     private int targetId = -1;
     private AgentCore.Vec2 previousAim = new AgentCore.Vec2(0, 0);
@@ -90,13 +93,15 @@ final class PracticeCombatPolicy {
 
         updateAmmo(nowMs);
         remember(world.enemies(), nowMs);
+        opponentModel.observe(world.enemies(), aspect, nowMs);
         AgentCore.Track player = metric(world.player(), aspect);
         AgentCore.Vec2 playerNow = player.pos();
 
         AgentCore.Vec2 dodge = bestDodge(player, world.projectiles(), aspect);
         if (dodge.len() > .1f) {
             previousMove = dodge;
-            return new Action(dodge, previousAim, false, false, false, "practice: predictive multi-projectile dodge");
+            return new Action(dodge, previousAim, false, false, false,
+                    "practice: predictive multi-projectile dodge");
         }
 
         Target target = selectTarget(playerNow, world.enemies(), aspect, nowMs);
@@ -114,21 +119,28 @@ final class PracticeCombatPolicy {
 
         AgentCore.Vec2 toTarget = target.pos().sub(playerNow);
         float distance = toTarget.len();
-        AgentCore.Vec2 rawAim = computeAim(playerNow, target, distance);
-        float aimBlend = target.observed() ? .78f : .56f;
+        AimSolution solution = computeAim(playerNow, target, distance);
+        float aimBlend = target.observed() ? .80f : .55f;
+        float uncertaintyDamping = 1f - solution.uncertainty() * .32f;
+        aimBlend *= clamp(uncertaintyDamping, .58f, 1f);
+        AgentCore.Vec2 rawAim = solution.direction();
         AgentCore.Vec2 aim = previousAim.len() > .05f
                 ? previousAim.mul(1f - aimBlend).add(rawAim.mul(aimBlend)).norm()
                 : rawAim;
         float agreement = previousAim.len() > .05f ? previousAim.dot(aim) : 1f;
-        stableAimFrames = agreement > .975f ? stableAimFrames + 1 : Math.max(0, stableAimFrames - 1);
+        stableAimFrames = agreement > (.972f + solution.uncertainty() * .010f)
+                ? stableAimFrames + 1
+                : Math.max(0, stableAimFrames - 1);
         previousAim = aim;
 
-        float hitChance = estimateHitChance(target, distance, stableAimFrames);
+        float hitChance = estimateHitChance(target, distance, stableAimFrames, solution);
         float effectiveRange = profile.attackRange() * (target.observed() ? 1f : .90f);
         boolean inRange = distance <= effectiveRange;
         boolean hasAmmo = estimatedAmmo >= .92f;
         boolean cadenceReady = nowMs - lastShotMs >= minimumShotIntervalMs();
-        boolean fire = inRange && hasAmmo && cadenceReady && hitChance >= profile.fireThreshold();
+        boolean reserveShot = shouldReserveAmmo(target, distance, hitChance, solution);
+        boolean fire = inRange && hasAmmo && cadenceReady && !reserveShot
+                && hitChance >= adaptiveFireThreshold(solution);
 
         if (!target.observed()) {
             long hiddenMs = nowMs - target.lastSeenMs();
@@ -137,13 +149,14 @@ final class PracticeCombatPolicy {
                     && hiddenMs <= (long)(profile.bushMemorySeconds() * 1000f)
                     && distance <= profile.attackRange() * (.90f - uncertainty * .15f)
                     && target.confidence() >= .38f
-                    && stableAimFrames >= 1;
+                    && stableAimFrames >= 1
+                    && solution.uncertainty() < .58f;
         }
 
         AgentCore.Vec2 move = movementForRange(playerNow, toTarget, distance, aspect, target, nowMs);
         previousMove = move;
-        boolean useSuper = shouldUseSuper(target, distance, hitChance, nowMs);
-        boolean useHyper = shouldUseHypercharge(target, distance, hitChance, nowMs);
+        boolean useSuper = shouldUseSuper(target, distance, hitChance, nowMs, solution);
+        boolean useHyper = shouldUseHypercharge(target, distance, hitChance, nowMs, solution);
 
         if (fire) {
             estimatedAmmo = Math.max(0f, estimatedAmmo - 1f);
@@ -152,14 +165,33 @@ final class PracticeCombatPolicy {
         if (useSuper) lastSuperMs = nowMs;
         if (useHyper) lastHyperMs = nowMs;
 
+        PracticeOpponentModel.Estimate model = opponentModel.estimate(target.id());
         String reason = "practice: " + profile.label()
                 + " d=" + fmt(distance)
                 + " hit=" + fmt(hitChance)
                 + " ammo=" + fmt(estimatedAmmo)
                 + " stable=" + stableAimFrames
+                + " model=" + model.samples()
+                + "/u" + fmt(solution.uncertainty())
+                + (reserveShot ? " reserve" : "")
                 + (target.observed() ? " visible" : " memory")
                 + (fire ? " fire" : " hold");
         return new Action(move, aim, fire, useSuper, useHyper, reason);
+    }
+
+    private float adaptiveFireThreshold(AimSolution solution) {
+        float uncertaintyPenalty = solution.uncertainty() * .12f;
+        float qualityCredit = Math.max(0f, solution.modelQuality() - .60f) * .08f;
+        return clamp(profile.fireThreshold() + uncertaintyPenalty - qualityCredit,
+                profile.fireThreshold() * .90f, .88f);
+    }
+
+    private boolean shouldReserveAmmo(Target target, float distance, float hitChance, AimSolution solution) {
+        if (estimatedAmmo > 1.15f) return false;
+        if (profile.meleeLike() && distance <= profile.attackRange() * .72f) return false;
+        if (distance <= profile.attackRange() * .48f && target.observed()) return false;
+        float required = .72f + solution.uncertainty() * .13f;
+        return hitChance < required || solution.modelQuality() < .48f;
     }
 
     private long minimumShotIntervalMs() {
@@ -224,12 +256,15 @@ final class PracticeCombatPolicy {
         float sticky = t.id() == targetId ? .28f : 0f;
         float visible = t.observed() ? .20f : -.08f;
         float closeThreat = 1f - clamp(d / Math.max(.16f, profile.attackRange()), 0f, 1f);
+        PracticeOpponentModel.Estimate model = opponentModel.estimate(t.id());
+        float predictable = (1f - model.uncertainty()) * .12f;
         return t.confidence() * 1.35f + rangeFit * .34f + sticky + visible
-                + closeThreat * .22f + velocityThreat * .08f - d * .20f;
+                + closeThreat * .22f + velocityThreat * .08f + predictable - d * .20f;
     }
 
-    private AgentCore.Vec2 computeAim(AgentCore.Vec2 shooter, Target target, float distance) {
-        if (profile.meleeLike()) return target.pos().sub(shooter).norm();
+    private AimSolution computeAim(AgentCore.Vec2 shooter, Target target, float distance) {
+        if (profile.meleeLike())
+            return new AimSolution(target.pos().sub(shooter).norm(), 1f, .04f);
 
         float speed = Math.max(.25f, profile.projectileSpeed());
         float maxT = profile.thrower() ? .90f : .70f;
@@ -242,13 +277,14 @@ final class PracticeCombatPolicy {
             if (profile.thrower()) flight = flight * 1.20f + .06f;
             t = clamp(t * .30f + flight * .70f, 0f, maxT);
         }
-        AgentCore.Vec2 future = target.pos()
-                .add(target.velocity().mul(t))
-                .add(target.acceleration().mul(.5f * t * t));
-        return future.sub(shooter).norm();
+
+        PracticeOpponentModel.Prediction prediction = opponentModel.predict(
+                target.id(), shooter, target.pos(), target.velocity(), target.acceleration(), t, profile.attackWidth());
+        AgentCore.Vec2 direction = prediction.point().sub(shooter).norm();
+        return new AimSolution(direction, prediction.quality(), prediction.uncertainty());
     }
 
-    private float estimateHitChance(Target target, float distance, int stableFrames) {
+    private float estimateHitChance(Target target, float distance, int stableFrames, AimSolution solution) {
         float range = Math.max(.05f, profile.attackRange());
         float distanceRatio = clamp(distance / range, 0f, 1.25f);
         float distanceScore = 1f - clamp(distanceRatio * .50f, 0f, .62f);
@@ -262,8 +298,10 @@ final class PracticeCombatPolicy {
         float widthBonus = clamp(profile.attackWidth() / .12f, 0f, 1f) * .20f;
         float visibility = target.observed() ? .12f : -.20f;
         float aimStability = clamp(stableFrames / 4f, 0f, 1f) * .10f;
+        float modelBonus = (solution.modelQuality() - .50f) * .22f;
+        float uncertaintyPenalty = solution.uncertainty() * .16f;
         return clamp(target.confidence() * .40f + distanceScore * .43f + widthBonus + visibility
-                + aimStability - lateralMotion - accelPenalty, 0f, 1f);
+                + aimStability + modelBonus - uncertaintyPenalty - lateralMotion - accelPenalty, 0f, 1f);
     }
 
     private float hiddenUncertainty(long hiddenMs) {
@@ -306,7 +344,6 @@ final class PracticeCombatPolicy {
         AgentCore.Vec2 b = edgeSafe(player, tangent.mul(-1f), aspect);
         float sa = edgeScore(player.add(a.mul(.17f)), aspect) + a.dot(previousMove.norm()) * .08f;
         float sb = edgeScore(player.add(b.mul(.17f)), aspect) + b.dot(previousMove.norm()) * .08f;
-        // A slow deterministic phase prevents endless one-direction circles in simulations.
         if (((nowMs / 850L) & 1L) == 1L) { sa += .025f; sb -= .025f; }
         return sa >= sb ? a : b;
     }
@@ -346,18 +383,18 @@ final class PracticeCombatPolicy {
             List<AgentCore.Track> projectiles
     ) {
         float risk = 0f;
-        for (int step = 1; step <= 6; step++) {
-            float t = step * .08f;
-            AgentCore.Vec2 playerFuture = start.add(move.mul(.42f * t));
+        for (int step = 1; step <= 8; step++) {
+            float t = step * .065f;
+            AgentCore.Vec2 playerFuture = start.add(move.mul(.44f * t));
             for (AgentCore.Track shot : projectiles) {
                 AgentCore.Vec2 shotFuture = shot.pos()
                         .add(shot.velocity().mul(t))
                         .add(shot.acceleration().mul(.5f * t * t));
                 float radius = Math.max(.042f, player.radius() + shot.radius() + .025f);
                 float d = shotFuture.sub(playerFuture).len();
-                if (d < radius * 2.1f) {
-                    float proximity = 1f - clamp(d / (radius * 2.1f), 0f, 1f);
-                    float early = 1f - (step - 1) / 6f;
+                if (d < radius * 2.15f) {
+                    float proximity = 1f - clamp(d / (radius * 2.15f), 0f, 1f);
+                    float early = 1f - (step - 1) / 8f;
                     risk += proximity * (.55f + .45f * early) * Math.max(.25f, shot.confidence());
                 }
             }
@@ -365,17 +402,19 @@ final class PracticeCombatPolicy {
         return risk;
     }
 
-    private boolean shouldUseSuper(Target target, float distance, float hitChance, long nowMs) {
+    private boolean shouldUseSuper(Target target, float distance, float hitChance, long nowMs, AimSolution solution) {
         if (nowMs - lastSuperMs < 4500) return false;
         if (distance < profile.superMinRange() || distance > profile.superRange()) return false;
         if (!target.observed() && target.confidence() < .58f) return false;
-        return hitChance >= .62f && stableAimFrames >= 1;
+        return hitChance >= .64f && stableAimFrames >= 1 && solution.uncertainty() < .54f;
     }
 
-    private boolean shouldUseHypercharge(Target target, float distance, float hitChance, long nowMs) {
+    private boolean shouldUseHypercharge(Target target, float distance, float hitChance, long nowMs,
+                                         AimSolution solution) {
         if (nowMs - lastHyperMs < 9000) return false;
         if (!target.observed()) return false;
-        return distance <= profile.attackRange() * 1.08f && hitChance >= .72f && stableAimFrames >= 2;
+        return distance <= profile.attackRange() * 1.08f && hitChance >= .74f
+                && stableAimFrames >= 2 && solution.uncertainty() < .46f;
     }
 
     private AgentCore.Vec2 searchVector(AgentCore.Vec2 player, float aspect, long nowMs) {
