@@ -88,6 +88,9 @@ public final class GestureIntegrationTest {
             assertNull("Gesture engine failure: sent="+engine.get().sent+" completed="+engine.get().completed+" cancelled="+engine.get().cancelled,failure.get());
             assertEquals("Movement restarted instead of continuing",1,GestureTestActivity.leftDowns);
             assertTrue("Attack strokes missing",GestureTestActivity.attackDowns>=2);
+            assertTrue("Dispatched attack feedback missing",engine.get().attacksSent>=2);
+            assertTrue("Dispatch count diverged from actual touch events",
+                    Math.abs(engine.get().attacksSent-GestureTestActivity.attackDowns)<=1);
             assertTrue("Two fingers were not delivered",GestureTestActivity.maxPointers>=2);
             assertTrue("Movement events missing",GestureTestActivity.moves>2);
             assertEquals("Pointer was not released",0,GestureTestActivity.activePointers);

@@ -1,20 +1,20 @@
 # FSCSR
 
 Android-only screen perception and experimental touch-control app for Brawl Stars.
-Version **5.0.0** adds persistent practice-profile selection, a compact translucent overlay,
-and temporal crate/bush/motion diagnostics. Practice combat models and benchmarks are included
-for offline testing; profile selection and new diagnostics do not change live touch commands.
+Version **5.1.0** connects profile-specific combat to actual Android touch commands:
+predictive aiming, range control, multi-projectile evasion, short-horizon planning,
+and shot-feedback-based ammo estimates. Temporal crate/bush/motion output remains diagnostic.
 Visible movement and normal-attack controls are located automatically.
 There are no coordinate fields or save/calibration buttons.
 
 ## Install and start
 
-1. Download `FSCSR-5.0.0.apk` from the [5.0.0 release](https://github.com/tanuki276/FPSSC/releases/tag/v5.0.0).
-   See [release notes](docs/releases/5.0.0.md) for the test signing certificate and update compatibility.
-2. Open FSCSR. The title should show **5.0.0**.
+1. Download `FSCSR-5.1.0.apk` from the [5.1.0 release](https://github.com/tanuki276/FPSSC/releases/tag/v5.1.0).
+   See [release notes](docs/releases/5.1.0.md) for the test signing certificate and update compatibility.
+2. Open FSCSR. The title should show **5.1.0**.
 3. Use **操作サービスを有効にする** to enable FSCSR in Android Accessibility settings.
 4. Press **画面共有を開始** in landscape and choose the entire screen.
-5. Choose a practice profile on the setup screen (saved on device). The overlay character chip advances on tap and goes back on long press. This selection is for practice/diagnostics.
+5. Choose the matching combat profile on the setup screen (saved on device). The overlay character chip advances on tap and goes back on long press. This selection now changes live range, projectile speed, spacing and shot cadence.
 6. Switch to the Brawl Stars practice scene and press **AI OFF** in the transparent upper-left panel to turn it ON. **診断 ＋/−** expands or compacts diagnostics; the text region passes touches through.
 7. Once the player and visible joystick artwork are recognized, the app acquires
    movement/attack centers automatically. Positions must agree across three scans.
@@ -35,12 +35,16 @@ If the app cannot recognize the scene or buttons, diagnostics include separate m
 - `TouchService` / `GestureEngine`: active-window-verified Android AccessibilityService input with a continued movement pointer; at most one pending
   command, foreground-package gating, full-display dimension checks, age limit,
   explicit stop, and aspect-correct gesture directions.
-- `MainActivity`: start/stop, service setup, persistent practice-profile selector and diagnostics.
+- `MainActivity`: start/stop, service setup, persistent combat-profile selector and diagnostics.
 - `PracticeVisionDiagnostics`: temporal crate-like and moving-object candidates, bush coverage,
   confidence, and global scene-change suppression; diagnostics only.
-- `PracticeCombatPolicy`, `PracticeOpponentModel`, `PracticeTacticalPlanner`: offline practice
-  policy, opponent modeling and short-horizon planning, exercised by synthetic tests.
-  Live input continues to use `AgentCore`; selected profiles do not tune live combat.
+- `LiveCombatController`: connects `AgentCore` perception to profile-aware combat, camera-aware
+  target memory, bounded latency prediction, shootable-target selection and terrain routing.
+- `PracticeCombatPolicy`, `PracticeOpponentModel`, `PracticeTacticalPlanner`: shared live/test
+  combat decisions, opponent modeling and short-horizon planning. Live ammo estimates consume
+  dispatched attacks, rather than recommendations rejected by the input gate.
+- `LiveCombatDuelTest`: deterministic closed-loop comparison against the legacy policy.
+  Its perfect tracks do not test real-game recognition or establish a device win rate.
 
 Launcher/round/themed icons and a monochrome notification icon are included as
 Android vector/adaptive resources. No bitmap downloads or external icon fonts are
@@ -72,7 +76,7 @@ output and automatic movement/attack-button centers at production analysis size.
 Synthetic tests cover relocated/scaled control artwork, red attack, false super,
 missing buttons, temporal stability, occlusion expiry and scene/resize reset.
 JVM Bitmap/Color fixtures are test-only and are never packaged into the APK.
-GitHub Actions runs regression suites, Android build/lint, emulator touch integration and APK upload. On main, publication of 5.0.0 waits for all three jobs. The release build excludes the debug-only instrumentation activity.
+GitHub Actions runs regression suites, Android build/lint, emulator touch integration and APK upload. On main, publication of 5.1.0 waits for all three jobs. The release build excludes the debug-only instrumentation activity.
 
 ## Current limits
 
@@ -87,7 +91,7 @@ skins/maps, effects and HUD occlusions still need device/sequence testing.
 - Health bars anchor character positions; hidden/occluded HP bars may be missed. The compact overlay masks a small upper-left region; expanded diagnostics masks more, so collapse it during play.
 - Terrain recognition currently covers saturated brick tops and blue water, not every map palette or obstacle. Local steering is not global pathfinding.
 - Red/pink and yellow moving projectile candidates are supported, not all attack effects. Unknown projectiles and invisible enemies cannot be reliably avoided.
-- Range/projectile-speed defaults are generic; character-specific tuning, attack ownership and ammo-aware combat remain unimplemented.
+- Profiles contain approximate character-specific range/reload/projectile-speed tuning, not live patch statistics. Ammo is estimated from dispatched touches, not read from the HUD. Attack ownership is unknown; super/hypercharge inputs remain disabled.
 - Movement uses a continued pointer in 80 ms slices, with separate attack strokes. Stale input, loss of focus and stopping release the pointer. Android gesture cancellation disables automatic control. Emulator integration is not proof of Brawl Stars compatibility.
 - Menus, matchmaking, ammo management and character-specific tactics are not implemented. Android 14+ capture resize callbacks rebuild the analysis surface; on older devices restart capture after rotating/resizing.
 - `queueExtra` estimates relative source queue growth. It does not measure unknown

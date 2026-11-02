@@ -95,25 +95,33 @@ final class CombatNavigator {
     }
 
     ControlCommand route(WorldState s, ControlCommand c) {
+        return route(s, c, .65f, false);
+    }
+
+    ControlCommand route(WorldState s, ControlCommand c, float range, boolean throughWalls) {
         Track player=s.player();
-        if(player==null || !player.observed() || c.move().len()<.01f) { lastMove=new Vec2(0,0); return c; }
+        if(player==null || !player.observed()) { lastMove=new Vec2(0,0); return c; }
         Vec2 p=player.pos(), desired=c.move().norm();
         boolean fire=c.fire();
         String reason=c.reason();
         // Stop shooting if the actual aim ray meets solid terrain before the nearest aligned target.
-        float targetDistance=.5f;
+        float targetDistance=range;
         for(Track e:s.enemies()) {
             Vec2 d=e.pos().sub(p);
             if(d.norm().dot(c.aim())>.92f) targetDistance=Math.min(targetDistance,d.len());
         }
-        boolean dodging=c.reason().startsWith("dodge");
-        boolean occluded=!dodging && c.aim().len()>.1f && blocked(p.add(c.aim().mul(.045f)),p.add(c.aim().mul(targetDistance)),false);
-        if(occluded) { fire=false; reason+=" / wall blocks aim"; desired=c.aim(); }
+        boolean dodging=c.reason().contains("dodge") || c.reason().contains("EVADE");
+        boolean occluded=!throughWalls && c.aim().len()>.1f && blocked(p.add(c.aim().mul(.045f)),p.add(c.aim().mul(targetDistance)),false);
+        if(occluded) { fire=false; reason+=" / wall blocks aim"; if(!dodging) desired=c.aim(); }
         if(stalledSince!=0 && s.frameTimeMs()-stalledSince>750 && s.frameTimeMs()>=escapeUntil) {
             escapeUntil=s.frameTimeMs()+650;
             escape=new Vec2(-lastMove.y(),lastMove.x()).norm();
             if(blocked(p,p.add(escape.mul(.12f)),true)) escape=escape.mul(-1);
             stalledSince=0;
+        }
+        if(c.move().len()<.01f && !occluded) {
+            lastMove=new Vec2(0,0);
+            return new ControlCommand(lastMove,c.aim(),fire,c.superAttack(),reason);
         }
         boolean escaping=!dodging && s.frameTimeMs()<escapeUntil;
         if(escaping) { desired=escape; reason+=" / unstuck"; }
