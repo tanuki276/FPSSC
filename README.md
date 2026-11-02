@@ -1,20 +1,24 @@
 # FSCSR
 
 Android-only screen perception and experimental touch-control app for Brawl Stars.
-Version **4.0.0** adds an in-game transparent ON/OFF and diagnostics panel, physical-coordinate aiming, expanded HP/projectile detection and local terrain avoidance. Visible movement and normal-attack controls are located automatically.
+Version **5.0.0** adds persistent practice-profile selection, a compact translucent overlay,
+and temporal crate/bush/motion diagnostics. Practice combat models and benchmarks are included
+for offline testing; profile selection and new diagnostics do not change live touch commands.
+Visible movement and normal-attack controls are located automatically.
 There are no coordinate fields or save/calibration buttons.
 
 ## Install and start
 
-1. Download `FSCSR-4.0.0.apk` from the [4.0.0 release](https://github.com/tanuki276/FPSSC/releases/tag/v4.0.0).
-   See [release notes](docs/releases/4.0.0.md) for the test signing certificate and update compatibility.
-2. Open FSCSR. The title should show **4.0.0**.
+1. Download `FSCSR-5.0.0.apk` from the [5.0.0 release](https://github.com/tanuki276/FPSSC/releases/tag/v5.0.0).
+   See [release notes](docs/releases/5.0.0.md) for the test signing certificate and update compatibility.
+2. Open FSCSR. The title should show **5.0.0**.
 3. Use **操作サービスを有効にする** to enable FSCSR in Android Accessibility settings.
 4. Press **画面共有を開始** in landscape and choose the entire screen.
-5. Switch to the Brawl Stars practice scene and press **自動 OFF** in the transparent upper-left panel to turn it ON. **診断 ＋/−** expands or compacts diagnostics; the text region passes touches through.
-6. Once the player and visible joystick artwork are recognized, the app acquires
+5. Choose a practice profile on the setup screen (saved on device). The overlay character chip advances on tap and goes back on long press. This selection is for practice/diagnostics.
+6. Switch to the Brawl Stars practice scene and press **AI OFF** in the transparent upper-left panel to turn it ON. **診断 ＋/−** expands or compacts diagnostics; the text region passes touches through.
+7. Once the player and visible joystick artwork are recognized, the app acquires
    movement/attack centers automatically. Positions must agree across three scans.
-7. Stop from the persistent notification's **停止** action or FSCSR's **停止** button.
+8. Stop from the persistent notification's **停止** action or FSCSR's **停止** button.
 
 Automatic control starts OFF. Old saved coordinate preferences are ignored.
 If the app cannot recognize the scene or buttons, diagnostics include separate movement/attack candidate counts. The last game-foreground input status and gesture sent/completed/cancelled counters remain visible when returning to FSCSR. **診断結果を共有** includes perception and input status.
@@ -31,7 +35,12 @@ If the app cannot recognize the scene or buttons, diagnostics include separate m
 - `TouchService` / `GestureEngine`: active-window-verified Android AccessibilityService input with a continued movement pointer; at most one pending
   command, foreground-package gating, full-display dimension checks, age limit,
   explicit stop, and aspect-correct gesture directions.
-- `MainActivity`: start/stop, service setup, automatic-control switch and diagnostics.
+- `MainActivity`: start/stop, service setup, persistent practice-profile selector and diagnostics.
+- `PracticeVisionDiagnostics`: temporal crate-like and moving-object candidates, bush coverage,
+  confidence, and global scene-change suppression; diagnostics only.
+- `PracticeCombatPolicy`, `PracticeOpponentModel`, `PracticeTacticalPlanner`: offline practice
+  policy, opponent modeling and short-horizon planning, exercised by synthetic tests.
+  Live input continues to use `AgentCore`; selected profiles do not tune live combat.
 
 Launcher/round/themed icons and a monochrome notification icon are included as
 Android vector/adaptive resources. No bitmap downloads or external icon fonts are
@@ -63,7 +72,7 @@ output and automatic movement/attack-button centers at production analysis size.
 Synthetic tests cover relocated/scaled control artwork, red attack, false super,
 missing buttons, temporal stability, occlusion expiry and scene/resize reset.
 JVM Bitmap/Color fixtures are test-only and are never packaged into the APK.
-GitHub Actions runs regression suites, Android build/lint, emulator touch integration and APK upload. On main, publication of 4.0.0 waits for all three jobs. The release build excludes the debug-only instrumentation activity.
+GitHub Actions runs regression suites, Android build/lint, emulator touch integration and APK upload. On main, publication of 5.0.0 waits for all three jobs. The release build excludes the debug-only instrumentation activity.
 
 ## Current limits
 

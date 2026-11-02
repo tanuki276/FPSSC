@@ -6,8 +6,10 @@ import android.app.Activity;
 import android.content.Intent;
 import android.media.projection.MediaProjectionManager;
 import android.os.Bundle;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.Spinner;
 import android.widget.TextView;
 
 public final class MainActivity extends Activity {
@@ -15,13 +17,19 @@ public final class MainActivity extends Activity {
     private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
     private TextView statusView;
     private android.widget.Switch automatic;
+    private Spinner profileSpinner;
+    private boolean profileReady;
+
     private final Runnable refresh = new Runnable() {
         @Override public void run() {
-            statusView.setText(AgentService.status + "\n" + TouchService.diagnostics());
-            if (automatic != null && automatic.isChecked() != TouchService.isArmed()) automatic.setChecked(TouchService.isArmed());
+            statusView.setText("選択: "+PracticeProfileStore.selected(MainActivity.this).label()+"\n"
+                    +AgentService.status + "\n" + TouchService.diagnostics());
+            if (automatic != null && automatic.isChecked() != TouchService.isArmed())
+                automatic.setChecked(TouchService.isArmed());
             ui.postDelayed(this, 500);
         }
     };
+
     @Override protected void onResume() { super.onResume(); ui.post(refresh); }
     @Override protected void onPause() { ui.removeCallbacks(refresh); super.onPause(); }
 
@@ -35,13 +43,38 @@ public final class MainActivity extends Activity {
         root.setPadding(pad, pad, pad, pad);
 
         TextView title = new TextView(this);
-        title.setText("FSCSR " + BuildConfig.VERSION_NAME + "\n操作位置を自動認識");
+        title.setText("FSCSR " + BuildConfig.VERSION_NAME + "\n練習用プロファイル / 認識診断");
         title.setTextSize(22f);
         root.addView(title);
 
+        TextView profileTitle=new TextView(this);
+        profileTitle.setText("キャラクター / 戦闘プロファイル");
+        profileTitle.setPadding(0,24,0,4);
+        root.addView(profileTitle);
+
+        profileSpinner=new Spinner(this);
+        ArrayAdapter<String> adapter=new ArrayAdapter<>(this,android.R.layout.simple_spinner_item,BrawlerProfile.labels());
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        profileSpinner.setAdapter(adapter);
+        profileSpinner.setSelection(BrawlerProfile.indexOf(PracticeProfileStore.selected(this).id()));
+        profileSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent,android.view.View view,int position,long id) {
+                if(!profileReady) { profileReady=true; return; }
+                PracticeProfileStore.select(MainActivity.this,BrawlerProfile.idAt(position));
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+        });
+        root.addView(profileSpinner);
+
+        TextView profileHelp=new TextView(this);
+        profileHelp.setText("オーバーレイの『キャラ』チップでも変更できます。タップで次、長押しで前。選択は端末に保存されます。");
+        profileHelp.setTextSize(12f);
+        profileHelp.setPadding(0,4,0,20);
+        root.addView(profileHelp);
+
         TextView body = new TextView(this);
-        body.setText("横画面で全画面共有を開始すると、操作ボタンの位置を自動認識します。自動操作はブロスタが前面のときだけ送信します。通知の「停止」で終了できます。");
-        body.setPadding(0, 28, 0, 28);
+        body.setText("横画面で全画面共有を開始すると、操作ボタンの位置を自動認識します。オーバーレイは画面左上に小さく半透明で表示されます。");
+        body.setPadding(0, 8, 0, 20);
         root.addView(body);
 
         Button start = new Button(this);
@@ -61,9 +94,12 @@ public final class MainActivity extends Activity {
         accessibility.setText("操作サービスを有効にする（Android 設定）");
         accessibility.setOnClickListener(v -> startActivity(new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)));
         root.addView(accessibility);
+
         TextView automaticHelp = new TextView(this);
-        automaticHelp.setText("数値入力や保存は不要です。対戦画面の移動・攻撃ボタンが見えると位置を自動認識します。見つからない場合は診断欄に理由が出ます。");
+        automaticHelp.setText("操作位置は自動認識します。見つからない場合は診断欄を確認してください。");
+        automaticHelp.setPadding(0,12,0,2);
         root.addView(automaticHelp);
+
         automatic = new android.widget.Switch(this);
         automatic.setText("自動操作 ON / OFF");
         automatic.setOnCheckedChangeListener((button, enabled) -> {
@@ -80,18 +116,24 @@ public final class MainActivity extends Activity {
             TouchService.arm(enabled);
         });
         root.addView(automatic);
+
         statusView = new TextView(this);
         statusView.setTextIsSelectable(true);
         statusView.setPadding(0, 24, 0, 24);
         root.addView(statusView);
+
         Button share = new Button(this);
         share.setText("診断結果を共有");
         share.setOnClickListener(v -> startActivity(Intent.createChooser(new Intent(Intent.ACTION_SEND)
-                .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "FSCSR diagnostics\n" + AgentService.status + "\n" + TouchService.diagnostics()), "診断結果を共有")));
+                .setType("text/plain").putExtra(Intent.EXTRA_TEXT,
+                        "FSCSR diagnostics\nprofile="+PracticeProfileStore.selected(this).label()+"\n"
+                                + AgentService.status + "\n" + TouchService.diagnostics()), "診断結果を共有")));
         root.addView(share);
+
         android.widget.ScrollView scroll = new android.widget.ScrollView(this);
         scroll.addView(root);
         setContentView(scroll);
+
         if (android.os.Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 277);
