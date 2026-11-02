@@ -99,5 +99,9 @@ final class GameOverlay {
         }
         controls=null; diagnostics=null; exclusions=new int[0][];
     }
+    int[] toggleCenter() {
+        int[] point=new int[2]; toggle.getLocationOnScreen(point);
+        point[0]+=toggle.getWidth()/2; point[1]+=toggle.getHeight()/2; return point;
+    }
     boolean visible() { return controls!=null && controls.isAttachedToWindow(); }
 }

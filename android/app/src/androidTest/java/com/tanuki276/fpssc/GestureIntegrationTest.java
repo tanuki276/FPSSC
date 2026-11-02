@@ -29,6 +29,14 @@ public final class GestureIntegrationTest {
         if(!value.matches("[A-Za-z0-9_./:]+")) throw new IllegalArgumentException("Unexpected service list");
         return value;
     }
+    private void tap(int[] point) {
+        long now=SystemClock.uptimeMillis();
+        android.view.MotionEvent down=android.view.MotionEvent.obtain(now,now,android.view.MotionEvent.ACTION_DOWN,point[0],point[1],0);
+        android.view.MotionEvent up=android.view.MotionEvent.obtain(now,now+40,android.view.MotionEvent.ACTION_UP,point[0],point[1],0);
+        down.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN); up.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
+        try { assertTrue(automation.injectInputEvent(down,true)); assertTrue(automation.injectInputEvent(up,true)); }
+        finally { down.recycle(); up.recycle(); }
+    }
     @Test public void continuedMovementAttackReleaseAndForegroundGate() throws Exception {
         automation=instrumentation.getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES);
         String previous=shell("settings get secure enabled_accessibility_services");
@@ -50,6 +58,20 @@ public final class GestureIntegrationTest {
             }
             assertNotNull("Accessibility service did not connect",TouchService.instrumentationInstance());
             assertTrue("Transparent overlay was not attached",TouchService.instrumentationInstance().overlayVisible());
+            SystemClock.sleep(400);
+            AtomicReference<int[]> togglePoint=new AtomicReference<>();
+            instrumentation.runOnMainSync(()->togglePoint.set(TouchService.instrumentationInstance().instrumentationOverlayToggleCenter()));
+            AgentService.active=true;
+            tap(togglePoint.get()); SystemClock.sleep(150);
+            assertTrue("Overlay ON tap was not delivered",TouchService.isArmed());
+            tap(togglePoint.get()); SystemClock.sleep(150);
+            assertFalse("Overlay OFF tap did not stop automatic mode",TouchService.isArmed());
+            AgentService.active=false;
+            android.graphics.Bitmap screenshot=automation.takeScreenshot();
+            assertNotNull(screenshot);
+            try(java.io.FileOutputStream out=new java.io.FileOutputStream(new java.io.File(instrumentation.getTargetContext().getExternalFilesDir(null),"overlay.png"))) {
+                screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);
+            } finally { screenshot.recycle(); }
             instrumentation.runOnMainSync(GestureTestActivity::reset);
             DisplayMetrics dm=new DisplayMetrics();
             activity.getWindowManager().getDefaultDisplay().getRealMetrics(dm);
@@ -87,6 +109,7 @@ public final class GestureIntegrationTest {
             assertTrue(TouchService.diagnostics().contains("com.tanuki276.fpssc"));
             TouchService.arm(false);
         } finally {
+            AgentService.active=false;
             if(engine.get()!=null) instrumentation.runOnMainSync(()->engine.get().stop());
             TouchService.arm(false);
             if(activity!=null) { GestureTestActivity closing=activity; instrumentation.runOnMainSync(closing::finish); }

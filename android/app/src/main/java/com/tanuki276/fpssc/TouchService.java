@@ -105,6 +105,7 @@ public final class TouchService extends AccessibilityService {
         gameStatus("操作要求: move="+command.move()+" fire="+command.fire());
         engine.offer(command,profile,time,width,height);
     }
+    int[] instrumentationOverlayToggleCenter() { return BuildConfig.DEBUG && overlay!=null ? overlay.toggleCenter() : null; }
     boolean overlayVisible() { return overlay!=null && overlay.visible(); }
     // Package-private, no exported entry point; instrumentation can test actual dispatch without spoofing a game package.
     static TouchService instrumentationInstance() { return BuildConfig.DEBUG?instance:null; }
