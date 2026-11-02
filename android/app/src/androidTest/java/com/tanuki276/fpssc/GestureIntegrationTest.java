@@ -57,7 +57,7 @@ public final class GestureIntegrationTest {
                 System.err.println("SERVICE LOG: "+shell("logcat -d -s FPSSC AndroidRuntime"));
             }
             assertNotNull("Accessibility service did not connect",TouchService.instrumentationInstance());
-            assertTrue("Transparent overlay was not attached",TouchService.instrumentationInstance().overlayVisible());
+            instrumentation.runOnMainSync(()->assertTrue("Transparent overlay was not attached",TouchService.instrumentationInstance().overlayVisible()));
             SystemClock.sleep(400);
             AtomicReference<int[]> togglePoint=new AtomicReference<>();
             instrumentation.runOnMainSync(()->togglePoint.set(TouchService.instrumentationInstance().instrumentationOverlayToggleCenter()));

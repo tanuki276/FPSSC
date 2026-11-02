@@ -54,11 +54,11 @@ public final class TouchService extends AccessibilityService {
     }
     @Override protected void onServiceConnected() {
         android.util.Log.i("FSCSR","touch service connected pid="+android.os.Process.myPid());
-        instance=this;
         engine=new GestureEngine(this,()->armed&&gameActive(),message->{ arm(false); gameStatus(message); });
         arm(false);
         overlay=new GameOverlay(this);
         overlay.show();
+        instance=this; // Publish readiness only after input and overlay initialization.
     }
     // Input decisions query the active window, not a cached event package from FSCSR's setup screen.
     private boolean gameActive() {
