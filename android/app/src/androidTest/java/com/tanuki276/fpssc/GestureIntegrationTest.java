@@ -67,11 +67,8 @@ public final class GestureIntegrationTest {
             tap(togglePoint.get()); SystemClock.sleep(150);
             assertFalse("Overlay OFF tap did not stop automatic mode",TouchService.isArmed());
             AgentService.active=false;
-            android.graphics.Bitmap screenshot=automation.takeScreenshot();
-            assertNotNull(screenshot);
-            try(java.io.FileOutputStream out=new java.io.FileOutputStream(new java.io.File(instrumentation.getTargetContext().getExternalFilesDir(null),"overlay.png"))) {
-                screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);
-            } finally { screenshot.recycle(); }
+            // Shared shell-owned capture survives Gradle's test APK uninstall/cleanup.
+            shell("screencap -p /sdcard/Download/fscsr-overlay.png");
             instrumentation.runOnMainSync(GestureTestActivity::reset);
             DisplayMetrics dm=new DisplayMetrics();
             activity.getWindowManager().getDefaultDisplay().getRealMetrics(dm);
