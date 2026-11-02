@@ -9,8 +9,8 @@ import java.util.Map;
 /**
  * Practice/simulation combat controller. This policy remains detached from the live input backend.
  * It focuses on deterministic training-quality decisions: target memory, adaptive opponent motion
- * modeling, range control, predictive aiming, ammo pacing, multi-projectile evasion, and
- * conservative ability recommendations.
+ * modeling, short-horizon tactical planning, range control, predictive aiming, ammo pacing,
+ * multi-projectile evasion, and conservative ability recommendations.
  */
 final class PracticeCombatPolicy {
     record Action(
@@ -55,6 +55,7 @@ final class PracticeCombatPolicy {
 
     private final Map<Integer, Memory> enemyMemory = new HashMap<>();
     private final PracticeOpponentModel opponentModel = new PracticeOpponentModel();
+    private final PracticeTacticalPlanner planner = new PracticeTacticalPlanner();
     private BrawlerProfile profile = BrawlerProfile.byId(BrawlerProfile.DEFAULT_ID);
     private int targetId = -1;
     private AgentCore.Vec2 previousAim = new AgentCore.Vec2(0, 0);
@@ -97,19 +98,29 @@ final class PracticeCombatPolicy {
         AgentCore.Track player = metric(world.player(), aspect);
         AgentCore.Vec2 playerNow = player.pos();
 
-        AgentCore.Vec2 dodge = bestDodge(player, world.projectiles(), aspect);
-        if (dodge.len() > .1f) {
-            previousMove = dodge;
-            return new Action(dodge, previousAim, false, false, false,
-                    "practice: predictive multi-projectile dodge");
+        // Fast reflex path for imminent crossfire. The slower planner handles ordinary positioning.
+        AgentCore.Vec2 emergencyDodge = bestDodge(player, world.projectiles(), aspect);
+        if (emergencyDodge.len() > .1f && emergencyRisk(player, world.projectiles(), aspect) > .62f) {
+            previousMove = emergencyDodge;
+            return new Action(emergencyDodge, previousAim, false, false, false,
+                    "practice: emergency predictive dodge");
         }
 
         Target target = selectTarget(playerNow, world.enemies(), aspect, nowMs);
         if (target == null) {
             stableAimFrames = Math.max(0, stableAimFrames - 1);
+            PracticeTacticalPlanner.Plan searchPlan = planner.search(
+                    world.player(), world.projectiles(), aspect, previousMove, nowMs);
             AgentCore.Vec2 search = searchVector(playerNow, aspect, nowMs);
-            previousMove = search;
-            return new Action(search, previousAim, false, false, false, "practice: search / patrol");
+            AgentCore.Vec2 move;
+            if (searchPlan.mode() == PracticeTacticalPlanner.Mode.EVADE || searchPlan.danger() > .34f) {
+                move = searchPlan.move();
+            } else {
+                move = search.mul(.58f).add(searchPlan.move().mul(.42f)).norm().mul(.44f);
+            }
+            previousMove = move;
+            return new Action(move, previousAim, false, false, false,
+                    "practice: search / patrol · " + searchPlan.detail());
         }
 
         if (target.observed()) {
@@ -133,14 +144,23 @@ final class PracticeCombatPolicy {
                 : Math.max(0, stableAimFrames - 1);
         previousAim = aim;
 
+        PracticeOpponentModel.Estimate model = opponentModel.estimate(target.id());
+        PracticeTacticalPlanner.TargetState plannerTarget = new PracticeTacticalPlanner.TargetState(
+                target.id(), target.pos(), target.velocity(), target.acceleration(),
+                target.confidence(), target.observed());
+        PracticeTacticalPlanner.Plan tactical = planner.choose(
+                world.player(), plannerTarget, world.projectiles(), profile, aspect,
+                estimatedAmmo, previousMove, model, nowMs);
+
         float hitChance = estimateHitChance(target, distance, stableAimFrames, solution);
         float effectiveRange = profile.attackRange() * (target.observed() ? 1f : .90f);
         boolean inRange = distance <= effectiveRange;
         boolean hasAmmo = estimatedAmmo >= .92f;
         boolean cadenceReady = nowMs - lastShotMs >= minimumShotIntervalMs();
-        boolean reserveShot = shouldReserveAmmo(target, distance, hitChance, solution);
-        boolean fire = inRange && hasAmmo && cadenceReady && !reserveShot
-                && hitChance >= adaptiveFireThreshold(solution);
+        boolean reserveShot = shouldReserveAmmo(target, distance, hitChance, solution)
+                || (tactical.danger() > .72f && !profile.meleeLike());
+        float requiredHit = clamp(adaptiveFireThreshold(solution) - tactical.fireBias(), .34f, .90f);
+        boolean fire = inRange && hasAmmo && cadenceReady && !reserveShot && hitChance >= requiredHit;
 
         if (!target.observed()) {
             long hiddenMs = nowMs - target.lastSeenMs();
@@ -153,10 +173,17 @@ final class PracticeCombatPolicy {
                     && solution.uncertainty() < .58f;
         }
 
-        AgentCore.Vec2 move = movementForRange(playerNow, toTarget, distance, aspect, target, nowMs);
+        AgentCore.Vec2 move = tactical.move();
+        if (move.len() < .04f && tactical.mode() != PracticeTacticalPlanner.Mode.HOLD) {
+            move = movementForRange(playerNow, toTarget, distance, aspect, target, nowMs);
+        }
+        if (tactical.mode() == PracticeTacticalPlanner.Mode.EVADE) fire = false;
         previousMove = move;
-        boolean useSuper = shouldUseSuper(target, distance, hitChance, nowMs, solution);
-        boolean useHyper = shouldUseHypercharge(target, distance, hitChance, nowMs, solution);
+
+        boolean useSuper = tactical.mode() != PracticeTacticalPlanner.Mode.EVADE
+                && shouldUseSuper(target, distance, hitChance, nowMs, solution);
+        boolean useHyper = tactical.mode() != PracticeTacticalPlanner.Mode.EVADE
+                && shouldUseHypercharge(target, distance, hitChance, nowMs, solution);
 
         if (fire) {
             estimatedAmmo = Math.max(0f, estimatedAmmo - 1f);
@@ -165,17 +192,18 @@ final class PracticeCombatPolicy {
         if (useSuper) lastSuperMs = nowMs;
         if (useHyper) lastHyperMs = nowMs;
 
-        PracticeOpponentModel.Estimate model = opponentModel.estimate(target.id());
         String reason = "practice: " + profile.label()
                 + " d=" + fmt(distance)
                 + " hit=" + fmt(hitChance)
+                + " req=" + fmt(requiredHit)
                 + " ammo=" + fmt(estimatedAmmo)
                 + " stable=" + stableAimFrames
                 + " model=" + model.samples()
                 + "/u" + fmt(solution.uncertainty())
                 + (reserveShot ? " reserve" : "")
                 + (target.observed() ? " visible" : " memory")
-                + (fire ? " fire" : " hold");
+                + (fire ? " fire" : " hold")
+                + " · " + tactical.detail();
         return new Action(move, aim, fire, useSuper, useHyper, reason);
     }
 
@@ -374,6 +402,17 @@ final class PracticeCombatPolicy {
         DodgeCandidate best = candidates.stream().max(Comparator.comparingDouble(DodgeCandidate::score)).orElse(null);
         if (best == null) return new AgentCore.Vec2(0, 0);
         return best.direction();
+    }
+
+    private float emergencyRisk(AgentCore.Track playerRaw, List<AgentCore.Track> projectileRaw, float aspect) {
+        if (projectileRaw.isEmpty()) return 0f;
+        AgentCore.Track player = metric(playerRaw, aspect);
+        List<AgentCore.Track> projectiles = new ArrayList<>();
+        for (AgentCore.Track raw : projectileRaw) {
+            AgentCore.Track shot = metric(raw, aspect);
+            if (shot.confidence() >= .18f && shot.velocity().len() >= .08f) projectiles.add(shot);
+        }
+        return pathRisk(player.pos(), new AgentCore.Vec2(0, 0), player, projectiles);
     }
 
     private float pathRisk(
