@@ -90,16 +90,16 @@ jobs:
         with:
           name: FSCSR-release-apk
           path: release-artifact
-      - name: Publish verified 4.0.0 assets
+      - name: Publish verified 5.0.0 assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          grep -Fq "versionName '4.0.0'" android/app/build.gradle
-          cp release-artifact/app-release.apk FSCSR-4.0.0.apk
+          grep -Fq "versionName '5.0.0'" android/app/build.gradle
+          cp release-artifact/app-release.apk FSCSR-5.0.0.apk
           cp release-artifact/SIGNING-CERT.txt SIGNING-CERT.txt
-          sha256sum FSCSR-4.0.0.apk SIGNING-CERT.txt > SHA256SUMS
-          if gh release view v4.0.0 >/dev/null 2>&1; then
-            echo "v4.0.0 is already published; existing tag and assets are unchanged."
+          sha256sum FSCSR-5.0.0.apk SIGNING-CERT.txt > SHA256SUMS
+          if gh release view v5.0.0 >/dev/null 2>&1; then
+            echo "v5.0.0 is already published; existing tag and assets are unchanged."
             exit 0
           fi
-          gh release create v4.0.0 FSCSR-4.0.0.apk SHA256SUMS SIGNING-CERT.txt --target "$GITHUB_SHA" --title 'FSCSR 4.0.0' --notes-file docs/releases/4.0.0.md --latest
+          gh release create v5.0.0 FSCSR-5.0.0.apk SHA256SUMS SIGNING-CERT.txt --target "$GITHUB_SHA" --title 'FSCSR 5.0.0' --notes-file docs/releases/5.0.0.md --latest

@@ -19,7 +19,8 @@ public final class PracticeVisionDiagnosticsTest {
         int crate=rgb(190,125,55);
         for(int y=76;y<87;y++) for(int x=120;x<132;x++) b.setPixel(x,y,crate);
 
-        int shot=rgb(245,75,70);
+        // Keep luminance contrast above the motion threshold (38); red was nearly isoluminant with ground.
+        int shot=rgb(70,220,245);
         for(int y=104;y<108;y++) for(int x=movingX;x<movingX+5;x++) b.setPixel(x,y,shot);
         return b;
     }
