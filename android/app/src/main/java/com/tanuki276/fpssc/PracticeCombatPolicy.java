@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Practice/simulation combat controller. This policy remains detached from the live input backend.
+ * Practice/simulation combat controller. The live controller also uses this policy with dispatched-shot feedback.
  * It focuses on deterministic training-quality decisions: target memory, adaptive opponent motion
  * modeling, short-horizon tactical planning, range control, predictive aiming, ammo pacing,
  * multi-projectile evasion, and conservative ability recommendations.
@@ -62,6 +62,14 @@ final class PracticeCombatPolicy {
     private AgentCore.Vec2 previousMove = new AgentCore.Vec2(0, 0);
     private int stableAimFrames;
     private long lastShotMs;
+    private boolean externalShotFeedback;
+
+    void useDispatchedShotFeedback() { externalShotFeedback = true; }
+    void recordDispatchedShots(long count, long nowMs) {
+        if (count <= 0) return;
+        estimatedAmmo = Math.max(0f, estimatedAmmo - Math.min(count, profile.ammoCapacity()));
+        lastShotMs = nowMs;
+    }
     private float estimatedAmmo;
     private long lastTickMs;
     private long lastSuperMs;
@@ -78,11 +86,15 @@ final class PracticeCombatPolicy {
         if (next == null) return;
         profile = next;
         estimatedAmmo = Math.min(estimatedAmmo, profile.ammoCapacity());
-        if (estimatedAmmo < .1f) estimatedAmmo = profile.ammoCapacity();
         targetId = -1;
         previousAim = new AgentCore.Vec2(0, 0);
         previousMove = new AgentCore.Vec2(0, 0);
         stableAimFrames = 0;
+    }
+
+    void excludeTargets(java.util.Set<Integer> blocked) {
+        enemyMemory.keySet().removeAll(blocked);
+        if(blocked.contains(targetId)) { targetId=-1; previousAim=new AgentCore.Vec2(0,0); stableAimFrames=0; }
     }
 
     BrawlerProfile profile() { return profile; }
@@ -93,6 +105,11 @@ final class PracticeCombatPolicy {
             return Action.idle("practice: player uncertain");
 
         updateAmmo(nowMs);
+        // Stored positions are screen-relative; carry them with camera motion before refreshing observations.
+        AgentCore.Vec2 shift = world.globalFrameShift();
+        enemyMemory.replaceAll((id, m) -> new Memory(m.id(), m.pos().add(shift), m.velocity(),
+                m.acceleration(), m.confidence(), m.lastSeenMs()));
+        if (lastKnownEnemyMs != 0) lastKnownEnemy = lastKnownEnemy.add(metric(shift, aspect));
         remember(world.enemies(), nowMs);
         opponentModel.observe(world.enemies(), aspect, nowMs);
         AgentCore.Track player = metric(world.player(), aspect);
@@ -185,7 +202,7 @@ final class PracticeCombatPolicy {
         boolean useHyper = tactical.mode() != PracticeTacticalPlanner.Mode.EVADE
                 && shouldUseHypercharge(target, distance, hitChance, nowMs, solution);
 
-        if (fire) {
+        if (fire && !externalShotFeedback) {
             estimatedAmmo = Math.max(0f, estimatedAmmo - 1f);
             lastShotMs = nowMs;
         }
@@ -270,7 +287,10 @@ final class PracticeCombatPolicy {
 
         Target best = candidates.stream().max(Comparator.comparingDouble(t -> targetScore(player, t))).orElse(null);
         if (best != null) {
-            if (targetId != best.id()) stableAimFrames = 0;
+            if (targetId != best.id()) {
+                stableAimFrames = 0;
+                previousAim = new AgentCore.Vec2(0, 0);
+            }
             targetId = best.id();
         }
         return best;

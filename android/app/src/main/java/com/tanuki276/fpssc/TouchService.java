@@ -22,6 +22,10 @@ public final class TouchService extends AccessibilityService {
     private static volatile long lastGameAt;
     static volatile String inputStatus="操作サービス未接続";
 
+    static long dispatchedAttacks() {
+        TouchService s=instance;
+        return s==null||s.engine==null?0:s.engine.attacksSent;
+    }
     static boolean connected() { return instance!=null; }
     static boolean isArmed() { return armed; }
     static void arm(boolean enabled) {

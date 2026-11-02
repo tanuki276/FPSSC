@@ -24,6 +24,7 @@ final class GestureEngine {
     private long sequence;
     private long nextAttackAt;
     long sent,completed,cancelled;
+    volatile long attacksSent;
     GestureEngine(AccessibilityService service,BooleanSupplier allowed,Consumer<String> failure) {
         this.service=service; this.allowed=allowed; this.failure=failure;
     }
@@ -72,7 +73,7 @@ final class GestureEngine {
             builder.addStroke(new GestureDescription.StrokeDescription(path,start,SLICE_MS-start,false));
         }
         movement=nextMovement;
-        dispatch(builder.build(),true);
+        if(dispatch(builder.build(),true) && fire) attacksSent++;
     }
     private static float clip(float coordinate,int limit) { return Math.max(1,Math.min(limit-1,coordinate)); }
     private GestureDescription.StrokeDescription endStroke() {
@@ -84,7 +85,7 @@ final class GestureEngine {
         GestureDescription.StrokeDescription ending=endStroke(); movement=null;
         dispatch(new GestureDescription.Builder().addStroke(ending).build(),false);
     }
-    private void dispatch(GestureDescription gesture,boolean repeat) {
+    private boolean dispatch(GestureDescription gesture,boolean repeat) {
         busy=true;
         long token=++sequence;
         try {
@@ -111,10 +112,12 @@ final class GestureEngine {
                         if(movement!=null) release();
                     }
                 },400);
+                return true;
             }
         } catch(RuntimeException e) {
             busy=false; movement=null; latest=null;
             failure.accept("タッチエラー: "+e.getClass().getSimpleName());
         }
+        return false;
     }
 }

@@ -96,9 +96,13 @@ final class AgentCore {
         return analyzePixels(FramePixels.copy(frame), nowMs, captureAgeMs);
     }
 
+    WorldState perceivePixels(FramePixels frame, long nowMs, float captureAgeMs) {
+        lastState = vision.detectPixels(frame, nowMs, captureAgeMs);
+        return lastState;
+    }
+
     ControlCommand analyzePixels(FramePixels frame, long nowMs, float captureAgeMs) {
-        WorldState state = vision.detectPixels(frame, nowMs, captureAgeMs);
-        lastState = state;
+        WorldState state = perceivePixels(frame, nowMs, captureAgeMs);
         if (frame == null) return ControlCommand.idle("invalid frame");
         float aspect = frame.getWidth() / (float) frame.getHeight();
         WorldState physical = new WorldState(state.player() == null ? null : metric(state.player(), aspect),

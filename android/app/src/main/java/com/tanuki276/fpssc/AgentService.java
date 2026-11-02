@@ -38,6 +38,7 @@ public final class AgentService extends Service {
     static volatile long statusTime;
 
     private AgentCore core;
+    private LiveCombatController combat;
     private FrameTiming frameTiming;
     private ControlLocator controlLocator;
     private PracticeVisionDiagnostics visionDiagnostics;
@@ -97,6 +98,7 @@ public final class AgentService extends Service {
 
     private void resetAnalyzers() {
         core = new AgentCore(true);
+        combat = new LiveCombatController();
         frameTiming = new FrameTiming();
         controlLocator = new ControlLocator();
         visionDiagnostics = new PracticeVisionDiagnostics();
@@ -193,14 +195,18 @@ public final class AgentService extends Service {
 
             long visionStart = SystemClock.elapsedRealtime();
             PracticeVisionDiagnostics.Result vision = visionDiagnostics.analyze(analysisFrame, visionStart);
-            AgentCore.ControlCommand command = core.analyzePixels(analysisFrame, visionStart, imageAgeMs);
+            AgentCore.WorldState world = core.perceivePixels(analysisFrame, visionStart, imageAgeMs);
             ControlLocator.Layout layout = controlLocator.updatePixels(analysisFrame, visionStart, core.hasObservedPlayer());
+            AgentCore.ControlCommand command = combat.decide(analysisFrame, world,
+                    PracticeProfileStore.selected(this), visionStart, TouchService.isArmed() && layout != null,
+                    TouchService.dispatchedAttacks());
             TouchService.submit(command, layout == null ? null : layout.profile(), callbackAt - imageAgeMs, width, height);
 
             long end = SystemClock.elapsedRealtime();
             long visionMs = end - visionStart;
             long totalMs = end - callbackAt;
             core.observePipelineLatency(totalMs);
+            combat.observeLatency(totalMs);
             frameCount++;
             BrawlerProfile selected = PracticeProfileStore.selected(this);
 

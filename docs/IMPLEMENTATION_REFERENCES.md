@@ -53,3 +53,29 @@ The transparent UI uses Android's documented
 [TYPE_ACCESSIBILITY_OVERLAY](https://developer.android.com/reference/android/view/WindowManager.LayoutParams#TYPE_ACCESSIBILITY_OVERLAY).
 Controls and touch-through diagnostics are separate windows. No external
 model weights or bot source have been imported for 4.0.
+
+
+## FSCSR 5.1 live combat follow-up
+
+Reviewed [Pyla-RL `app/play.py` at cf7c3e1](https://github.com/CodeBanana69/Pyla-RL/blob/cf7c3e1f6fb0962f3f6fdafcde04191da1d6a28f/app/play.py):
+`lead_shot_angle`, `iter_hittable_enemies`, `_compute_dodge_vector`,
+`_start_dodge_commitment`, and multi-enemy spacing. It leads shots using tracked velocity,
+filters enemies by line of sight, and commits to wall-checked lateral evasion.
+The repository documents ONNX detection and continuous analog joystick control on Windows.
+This is a design reference; no source code or model weights were copied. Its declared
+CC BY-NC terms do not establish availability of an Android-compatible, validated model.
+
+The Android implementation now connects the existing opponent model and short-horizon planner
+to the real capture/input path through `LiveCombatController`. It adds bounded queue/pipeline
+prediction, shot dispatch feedback, camera-shifted target memory, shootable-target filtering,
+thrower landing-distance stick magnitude, and stationary wall-ray checks. Existing foreground,
+age, self-observation and control-localization gates are retained. Super/hypercharge are not sent.
+
+`LiveCombatDuelTest` uses 16 deterministic enemy-motion phases, simulated bullets with swept
+collision, shared speed/range/ammo rules, finite health and a direct-aim opponent. At this revision:
+legacy 16 wins / 40 hits taken / 142 shots; live 16 wins / 0 hits taken / 96 shots.
+Both deal 96 hits. **Tracks are ground truth, the arena has no obstacles, and this is not a
+Brawl Stars match or a measurement of vision quality.** Separate tests cover synthetic HUD pixels
+through actual perception into the controller, profile behavior, wall rejection, thrower aim strength,
+latency/stale gates and dispatched-shot accounting. Emulator tests validate Android touch delivery.
+Real match footage/device testing remains necessary before claiming reliable bot wins.

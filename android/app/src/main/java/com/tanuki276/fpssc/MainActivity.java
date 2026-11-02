@@ -43,7 +43,7 @@ public final class MainActivity extends Activity {
         root.setPadding(pad, pad, pad, pad);
 
         TextView title = new TextView(this);
-        title.setText("FSCSR " + BuildConfig.VERSION_NAME + "\n練習用プロファイル / 認識診断");
+        title.setText("FSCSR " + BuildConfig.VERSION_NAME + "\n実戦プロファイル / 認識診断");
         title.setTextSize(22f);
         root.addView(title);
 
@@ -67,7 +67,7 @@ public final class MainActivity extends Activity {
         root.addView(profileSpinner);
 
         TextView profileHelp=new TextView(this);
-        profileHelp.setText("オーバーレイの『キャラ』チップでも変更できます。タップで次、長押しで前。選択は端末に保存されます。");
+        profileHelp.setText("オーバーレイの『キャラ』チップでも変更できます。タップで次、長押しで前。選択した射程・弾速・距離戦術が実操作に適用されます。選択は端末に保存されます。");
         profileHelp.setTextSize(12f);
         profileHelp.setPadding(0,4,0,20);
         root.addView(profileHelp);
