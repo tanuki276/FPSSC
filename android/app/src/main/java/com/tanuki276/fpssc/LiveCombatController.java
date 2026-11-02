@@ -47,14 +47,14 @@ final class LiveCombatController {
         float lag=Math.max(0,Math.min(.20f,(world.captureAgeMs()+latencyMs+40)/1000f));
         Track predictedPlayer=advance(player,lag);
         WorldState predicted=new WorldState(predictedPlayer,
-                world.enemies().stream().map(t->advance(t,lag)).toList(),
-                world.projectiles().stream().map(t->advance(t,lag)).toList(),
+                world.enemies().stream().map(t->advance(t,lag)).collect(java.util.stream.Collectors.toList()),
+                world.projectiles().stream().map(t->advance(t,lag)).collect(java.util.stream.Collectors.toList()),
                 now,world.captureAgeMs(),world.globalFrameShift(),world.quality());
         WorldState physical=physical(world,aspect);
         navigator.update(frame,physical);
         // Prefer shootable targets, rather than retaining the nearest enemy behind a wall.
         List<Track> hittable=predicted.enemies().stream().filter(e->profile.thrower()
-                || !navigator.blocked(metric(predictedPlayer.pos(),aspect),metric(e.pos(),aspect),false)).toList();
+                || !navigator.blocked(metric(predictedPlayer.pos(),aspect),metric(e.pos(),aspect),false)).collect(java.util.stream.Collectors.toList());
         java.util.Set<Integer> blocked=new java.util.HashSet<>();
         for(Track enemy:predicted.enemies()) if(!hittable.contains(enemy)) blocked.add(enemy.id());
         policy.excludeTargets(blocked);
@@ -88,8 +88,8 @@ final class LiveCombatController {
                 t.radius(),t.confidence(),t.ageFrames(),t.observed());
     }
     private static WorldState physical(WorldState w,float a) {
-        return new WorldState(physical(w.player(),a),w.enemies().stream().map(t->physical(t,a)).toList(),
-                w.projectiles().stream().map(t->physical(t,a)).toList(),w.frameTimeMs(),w.captureAgeMs(),
+        return new WorldState(physical(w.player(),a),w.enemies().stream().map(t->physical(t,a)).collect(java.util.stream.Collectors.toList()),
+                w.projectiles().stream().map(t->physical(t,a)).collect(java.util.stream.Collectors.toList()),w.frameTimeMs(),w.captureAgeMs(),
                 metric(w.globalFrameShift(),a),w.quality());
     }
 }
