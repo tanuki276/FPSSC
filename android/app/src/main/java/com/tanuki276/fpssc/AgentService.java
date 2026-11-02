@@ -29,9 +29,6 @@ public final class AgentService extends Service {
     public static final String EXTRA_RESULT_DATA = "result_data";
     private static final String CHANNEL = "fpssc_agent";
     private static final int NOTIFICATION_ID = 2761;
-
-    // 640px keeps small projectiles materially clearer than the old 480px analysis frame,
-    // while still being much cheaper than running the detector over the native screenshot.
     private static final int ANALYSIS_WIDTH = 640;
 
     private final AtomicBoolean processing = new AtomicBoolean(false);
@@ -39,9 +36,11 @@ public final class AgentService extends Service {
     static volatile String overlayStatus = "FSCSR · 画面共有待機";
     static volatile boolean active;
     static volatile long statusTime;
+
     private AgentCore core;
     private FrameTiming frameTiming;
     private ControlLocator controlLocator;
+    private PracticeVisionDiagnostics visionDiagnostics;
     private FramePixels analysisFrame;
     private MediaProjection.Callback projectionCallback;
 
@@ -56,8 +55,7 @@ public final class AgentService extends Service {
     private long frameCount;
     private long droppedFrames;
 
-    @Override
-    public void onCreate() {
+    @Override public void onCreate() {
         super.onCreate();
         captureThread = new HandlerThread("fpssc-capture");
         captureThread.start();
@@ -66,8 +64,7 @@ public final class AgentService extends Service {
         getSystemService(NotificationManager.class).createNotificationChannel(channel);
     }
 
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
+    @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && "stop".equals(intent.getAction())) {
             TouchService.arm(false);
             stopSelf();
@@ -85,14 +82,11 @@ public final class AgentService extends Service {
             stopSelf(startId);
             return START_NOT_STICKY;
         }
-
         startForeground(NOTIFICATION_ID, notification("starting capture"));
         captureHandler.post(() -> {
-            // A consent token must not be reused; repeated starts keep the active session.
             if (projection != null) return;
-            try {
-                startCapture(resultCode, resultData);
-            } catch (RuntimeException e) {
+            try { startCapture(resultCode, resultData); }
+            catch (RuntimeException e) {
                 Log.e("FSCSR", "capture setup failed", e);
                 stopCapture();
                 stopSelf(startId);
@@ -101,12 +95,18 @@ public final class AgentService extends Service {
         return START_NOT_STICKY;
     }
 
-    private void startCapture(int resultCode, Intent resultData) {
-        status = "画面を取得しています…";
-        statusTime = SystemClock.elapsedRealtime();
+    private void resetAnalyzers() {
         core = new AgentCore(true);
         frameTiming = new FrameTiming();
         controlLocator = new ControlLocator();
+        visionDiagnostics = new PracticeVisionDiagnostics();
+        analysisFrame = null;
+    }
+
+    private void startCapture(int resultCode, Intent resultData) {
+        status = "画面を取得しています…";
+        statusTime = SystemClock.elapsedRealtime();
+        resetAnalyzers();
         frameCount = 0;
         droppedFrames = 0;
 
@@ -118,10 +118,7 @@ public final class AgentService extends Service {
 
         MediaProjectionManager manager = getSystemService(MediaProjectionManager.class);
         projection = manager.getMediaProjection(resultCode, resultData);
-        if (projection == null) {
-            stopSelf();
-            return;
-        }
+        if (projection == null) { stopSelf(); return; }
 
         MediaProjection session = projection;
         projectionCallback = new MediaProjection.Callback() {
@@ -129,18 +126,14 @@ public final class AgentService extends Service {
                 if(projection==session) resizeCapture(contentWidth,contentHeight);
             }
             @Override public void onStop() {
-                if (projection == session) {
-                    stopCapture();
-                    stopSelf();
-                }
+                if (projection == session) { stopCapture(); stopSelf(); }
             }
         };
         projection.registerCallback(projectionCallback, captureHandler);
 
         reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);
         reader.setOnImageAvailableListener(this::onImage, captureHandler);
-        display = projection.createVirtualDisplay(
-                "FSCSR-capture", width, height, densityDpi,
+        display = projection.createVirtualDisplay("FSCSR-capture", width, height, densityDpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 reader.getSurface(), null, captureHandler);
         active=true;
@@ -157,8 +150,8 @@ public final class AgentService extends Service {
             display.setSurface(replacement.getSurface());
             reader=replacement; width=newWidth; height=newHeight;
             reader.setOnImageAvailableListener(this::onImage,captureHandler);
-            core=new AgentCore(true); controlLocator=new ControlLocator(); frameTiming=new FrameTiming(); analysisFrame=null;
-            status="画面サイズ変更: 操作位置を再認識中";
+            resetAnalyzers();
+            status="画面サイズ変更: 認識を再初期化中";
         } catch(RuntimeException e) {
             replacement.close();
             status="画面サイズ変更に失敗しました。画面共有を再開始してください";
@@ -169,15 +162,10 @@ public final class AgentService extends Service {
     }
 
     private void onImage(ImageReader source) {
-        // Setup, callbacks, and cleanup all run on the capture thread.
         if (source != reader) return;
         Image image;
-        try {
-            image = source.acquireLatestImage();
-        } catch (IllegalStateException e) {
-            Log.w("FSCSR", "capture reader unavailable", e);
-            return;
-        }
+        try { image = source.acquireLatestImage(); }
+        catch (IllegalStateException e) { Log.w("FSCSR", "capture reader unavailable", e); return; }
         if (image == null) return;
         if (!processing.compareAndSet(false, true)) {
             droppedFrames++;
@@ -204,33 +192,42 @@ public final class AgentService extends Service {
             long convertEnd = SystemClock.elapsedRealtime();
 
             long visionStart = SystemClock.elapsedRealtime();
+            PracticeVisionDiagnostics.Result vision = visionDiagnostics.analyze(analysisFrame, visionStart);
             AgentCore.ControlCommand command = core.analyzePixels(analysisFrame, visionStart, imageAgeMs);
             ControlLocator.Layout layout = controlLocator.updatePixels(analysisFrame, visionStart, core.hasObservedPlayer());
             TouchService.submit(command, layout == null ? null : layout.profile(), callbackAt - imageAgeMs, width, height);
+
             long end = SystemClock.elapsedRealtime();
             long visionMs = end - visionStart;
             long totalMs = end - callbackAt;
             core.observePipelineLatency(totalMs);
             frameCount++;
-            status = "解析中 · frame " + frameCount + "\n" + command.reason()
-                    + "\n移動 " + command.move() + "\n照準 " + command.aim()
-                    + "\n射撃 " + command.fire() + "\n" + core.telemetry()
+            BrawlerProfile selected = PracticeProfileStore.selected(this);
+
+            status = "解析中 · frame " + frameCount
+                    + "\n選択プロファイル " + selected.label()
+                    + "\n" + vision.detail()
+                    + "\n" + command.reason()
+                    + "\n移動 " + command.move() + " / 照準 " + command.aim()
+                    + " / 射撃 " + command.fire()
+                    + "\n" + core.telemetry()
                     + "\n" + controlLocator.status()
                     + (layout == null ? "" : "\n" + layout.profile())
                     + "\n処理時間 " + totalMs + " ms";
-            overlayStatus = "FSCSR " + BuildConfig.VERSION_NAME + " · " + totalMs + " ms · " + command.reason()
-                    + "\n" + core.telemetry()
-                    + "\n移動 " + command.move() + " 射撃 " + command.fire();
+
+            overlayStatus = PracticeProfileStore.compactLabel(this)
+                    + " · " + totalMs + "ms · " + vision.compact();
             statusTime = SystemClock.elapsedRealtime();
 
-            // Capture age is relative queue growth, not absolute source-to-display latency.
             Log.i("FSCSR", "frame=" + frameCount
+                    + " profile=" + selected.id()
+                    + " vision=" + vision.compact()
                     + " move=" + command.move()
                     + " aim=" + command.aim()
                     + " fire=" + command.fire()
                     + " reason=" + command.reason()
                     + " imageAgeMs=" + imageAgeMs
-                    + " convertMs=" + (convertEnd - convertStart)
+                    + " convertMs=" + (convertEnd-convertStart)
                     + " visionMs=" + visionMs
                     + " totalMs=" + totalMs
                     + " dropped=" + droppedFrames
@@ -239,9 +236,8 @@ public final class AgentService extends Service {
 
             if (frameCount % 8 == 0 && (android.os.Build.VERSION.SDK_INT < 33
                     || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)) {
-                getSystemService(NotificationManager.class).notify(
-                        NOTIFICATION_ID,
-                        notification(command.reason() + " · " + core.telemetry()));
+                getSystemService(NotificationManager.class).notify(NOTIFICATION_ID,
+                        notification(PracticeProfileStore.compactLabel(this) + " · " + vision.compact()));
             }
         } catch (RuntimeException t) {
             status = "解析エラー: " + t.getClass().getSimpleName();
@@ -268,11 +264,8 @@ public final class AgentService extends Service {
     }
 
     private static void release(String resource, Runnable action) {
-        try {
-            action.run();
-        } catch (RuntimeException e) {
-            Log.w("FSCSR", "Failed to release " + resource, e);
-        }
+        try { action.run(); }
+        catch (RuntimeException e) { Log.w("FSCSR", "Failed to release " + resource, e); }
     }
 
     private void stopCapture() {
@@ -287,6 +280,7 @@ public final class AgentService extends Service {
         projection = null;
         projectionCallback = null;
         core = null;
+        visionDiagnostics = null;
         analysisFrame = null;
         status = "停止中";
         overlayStatus = "FSCSR · 停止中";
@@ -301,14 +295,10 @@ public final class AgentService extends Service {
 
     @Override public void onDestroy() {
         TouchService.arm(false);
-        // Queue cleanup after any in-flight analysis, before terminating its looper.
         HandlerThread thread = captureThread;
         captureHandler.post(() -> {
-            try {
-                stopCapture();
-            } finally {
-                thread.quitSafely();
-            }
+            try { stopCapture(); }
+            finally { thread.quitSafely(); }
         });
         stopForeground(STOP_FOREGROUND_REMOVE);
         super.onDestroy();
