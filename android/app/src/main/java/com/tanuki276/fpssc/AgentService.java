@@ -39,6 +39,7 @@ public final class AgentService extends Service {
 
     private AgentCore core;
     private LiveCombatController combat;
+    private TeammateFollower follower;
     private FrameTiming frameTiming;
     private ControlLocator controlLocator;
     private PracticeVisionDiagnostics visionDiagnostics;
@@ -99,6 +100,7 @@ public final class AgentService extends Service {
     private void resetAnalyzers() {
         core = new AgentCore(true);
         combat = new LiveCombatController();
+        follower = new TeammateFollower();
         frameTiming = new FrameTiming();
         controlLocator = new ControlLocator();
         visionDiagnostics = new PracticeVisionDiagnostics();
@@ -197,9 +199,13 @@ public final class AgentService extends Service {
             PracticeVisionDiagnostics.Result vision = visionDiagnostics.analyze(analysisFrame, visionStart);
             AgentCore.WorldState world = core.perceivePixels(analysisFrame, visionStart, imageAgeMs);
             ControlLocator.Layout layout = controlLocator.updatePixels(analysisFrame, visionStart, core.hasObservedPlayer());
-            AgentCore.ControlCommand command = combat.decide(analysisFrame, world,
-                    PracticeProfileStore.selected(this), visionStart, TouchService.isArmed() && layout != null,
+            boolean follow=PracticeProfileStore.followsTeammate(this);
+            boolean canControl=TouchService.canAutomate() && layout!=null;
+            AgentCore.ControlCommand combatCommand = combat.decide(analysisFrame, world,
+                    PracticeProfileStore.selected(this), visionStart, canControl && !follow,
                     TouchService.dispatchedAttacks());
+            AgentCore.ControlCommand followCommand=follower.decide(analysisFrame,world,visionStart,canControl && follow);
+            AgentCore.ControlCommand command=follow?followCommand:combatCommand;
             TouchService.submit(command, layout == null ? null : layout.profile(), callbackAt - imageAgeMs, width, height);
 
             long end = SystemClock.elapsedRealtime();
@@ -211,7 +217,8 @@ public final class AgentService extends Service {
             BrawlerProfile selected = PracticeProfileStore.selected(this);
 
             status = "解析中 · frame " + frameCount
-                    + "\n選択プロファイル " + selected.label()
+                    + "\nモード " + (follow?"味方追従":"戦闘")
+                    + "\n味方 " + world.allies().size() + " / 選択プロファイル " + selected.label()
                     + "\n" + vision.detail()
                     + "\n" + command.reason()
                     + "\n移動 " + command.move() + " / 照準 " + command.aim()

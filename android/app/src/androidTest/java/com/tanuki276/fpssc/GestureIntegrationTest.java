@@ -95,8 +95,47 @@ public final class GestureIntegrationTest {
             assertTrue("Movement events missing",GestureTestActivity.moves>2);
             assertEquals("Pointer was not released",0,GestureTestActivity.activePointers);
             assertFalse(engine.get().holdingMovement());
+            // Follow movement yields the screen to real pin taps, keeps armed state, and resumes explicitly.
+            instrumentation.runOnMainSync(GestureTestActivity::reset);
+            TouchService.arm(true);
+            instrumentation.runOnMainSync(()->engine.set(TouchService.instrumentationInstance().instrumentationFollowEngine(
+                    TouchService::canAutomate,failure::set)));
+            AgentCore.ControlCommand follow=new AgentCore.ControlCommand(new AgentCore.Vec2(1,0),
+                    new AgentCore.Vec2(0,0),false,false,"follow fixture");
+            for(int i=0;i<8;i++) {
+                instrumentation.runOnMainSync(()->engine.get().offer(follow,profile,SystemClock.elapsedRealtime(),dm.widthPixels,dm.heightPixels));
+                SystemClock.sleep(40);
+            }
+            AtomicReference<int[]> pinPoint=new AtomicReference<>();
+            instrumentation.runOnMainSync(()->pinPoint.set(TouchService.instrumentationInstance().instrumentationPinsCenter()));
+            tap(pinPoint.get());
+            SystemClock.sleep(160);
+            assertTrue("Follow must stay ON during pins",TouchService.isArmed());
+            assertTrue(TouchService.manualPaused());
+            assertFalse("Follow pointer not released for pin menu",engine.get().holdingMovement());
+            int leftBefore=GestureTestActivity.leftDowns;
+            int pinsBefore=GestureTestActivity.attackDowns;
+            tap(new int[]{(int)(dm.widthPixels*.85f),(int)(dm.heightPixels*.6f)});
+            for(int i=0;i<6;i++) {
+                instrumentation.runOnMainSync(()->engine.get().offer(follow,profile,SystemClock.elapsedRealtime(),dm.widthPixels,dm.heightPixels));
+                SystemClock.sleep(40);
+            }
+            assertEquals("Automation restarted during manual pins",leftBefore,GestureTestActivity.leftDowns);
+            assertEquals("Manual pin tap was not delivered",pinsBefore+1,GestureTestActivity.attackDowns);
+            assertEquals("Manual touch was not released",0,GestureTestActivity.activePointers);
+            instrumentation.runOnMainSync(TouchService::resumeFollowing);
+            for(int i=0;i<6;i++) {
+                instrumentation.runOnMainSync(()->engine.get().offer(follow,profile,SystemClock.elapsedRealtime(),dm.widthPixels,dm.heightPixels));
+                SystemClock.sleep(40);
+            }
+            assertTrue("Explicit follow resume did not move",GestureTestActivity.leftDowns>leftBefore);
+            assertEquals("Follow mode injected an attack",pinsBefore+1,GestureTestActivity.attackDowns);
+            instrumentation.runOnMainSync(()->{ TouchService.arm(false); engine.get().stop(); });
+            SystemClock.sleep(160);
+            assertFalse("OFF must clear manual state",TouchService.manualPaused());
             instrumentation.runOnMainSync(GestureTestActivity::reset);
             allowed.set(true);
+            instrumentation.runOnMainSync(()->engine.set(TouchService.instrumentationInstance().instrumentationEngine(allowed::get,failure::set)));
             instrumentation.runOnMainSync(()->engine.get().offer(command,profile,SystemClock.elapsedRealtime()-1000,dm.widthPixels,dm.heightPixels));
             SystemClock.sleep(150);
             assertEquals("Stale command injected",0,GestureTestActivity.leftDowns);

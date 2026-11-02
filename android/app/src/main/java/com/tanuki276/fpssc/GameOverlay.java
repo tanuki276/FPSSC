@@ -20,7 +20,7 @@ final class GameOverlay {
     private TextView diagnostics;
     private Button toggle;
     private Button profile;
-    private Button details;
+    private Button details,mode,pins,resume;
     private boolean expanded;
     private static volatile int[][] exclusions=new int[0][];
 
@@ -29,6 +29,9 @@ final class GameOverlay {
             if(controls==null) return;
             toggle.setText(TouchService.isArmed()?"AI ON":"AI OFF");
             profile.setText(PracticeProfileStore.compactLabel(service));
+            mode.setText(PracticeProfileStore.followsTeammate(service)?"味方追従":"戦闘");
+            resume.setEnabled(TouchService.manualPaused() && TouchService.isArmed());
+            pins.setEnabled(PracticeProfileStore.followsTeammate(service) && TouchService.isArmed());
             diagnostics.setVisibility(expanded?View.VISIBLE:View.GONE);
             diagnostics.setMaxLines(expanded?10:2);
             if(expanded) diagnostics.setText("FSCSR " + BuildConfig.VERSION_NAME + "\n" + AgentService.status
@@ -101,6 +104,20 @@ final class GameOverlay {
         });
         compactButton(profile,112);
 
+        mode=new Button(service);
+        mode.setText(PracticeProfileStore.followsTeammate(service)?"味方追従":"戦闘");
+        mode.setOnClickListener(v->{
+            PracticeProfileStore.setFollowTeammate(service,!PracticeProfileStore.followsTeammate(service));
+            mode.setText(PracticeProfileStore.followsTeammate(service)?"味方追従":"戦闘");
+        });
+        compactButton(mode,68);
+        pins=new Button(service); pins.setText("ピンズ");
+        pins.setOnClickListener(v->TouchService.pauseForPins());
+        compactButton(pins,48);
+        resume=new Button(service); resume.setText("再開");
+        resume.setOnClickListener(v->TouchService.resumeFollowing());
+        compactButton(resume,40);
+
         details=new Button(service);
         details.setText("⋯");
         details.setOnClickListener(v->{
@@ -122,7 +139,7 @@ final class GameOverlay {
         diagnostics.setVisibility(View.GONE);
 
         try {
-            manager.addView(controls,params(dp(203),dp(34),0,0));
+            manager.addView(controls,params(dp(359),dp(34),0,0));
             manager.addView(diagnostics,params(dp(300),WindowManager.LayoutParams.WRAP_CONTENT,
                     WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,dp(35)));
             controls.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->updateExclusions());
@@ -166,6 +183,12 @@ final class GameOverlay {
         toggle.getLocationOnScreen(point);
         point[0]+=toggle.getWidth()/2;
         point[1]+=toggle.getHeight()/2;
+        return point;
+    }
+
+    int[] pinsCenter() {
+        int[] point=new int[2]; pins.getLocationOnScreen(point);
+        point[0]+=pins.getWidth()/2; point[1]+=pins.getHeight()/2;
         return point;
     }
 

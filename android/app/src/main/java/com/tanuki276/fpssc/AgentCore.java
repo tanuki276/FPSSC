@@ -28,7 +28,7 @@ final class AgentCore {
         Vec2 clampLen(float max) { float l = len(); return l <= max || l < 1e-5f ? this : mul(max / l); }
     }
 
-    enum Kind { PLAYER, ENEMY, PROJECTILE }
+    enum Kind { PLAYER, ENEMY, PROJECTILE, ALLY }
 
     record Detection(Kind kind, Vec2 pos, float radius, float confidence) {}
 
@@ -56,8 +56,14 @@ final class AgentCore {
             long frameTimeMs,
             float captureAgeMs,
             Vec2 globalFrameShift,
-            float quality
-    ) {}
+            float quality,
+            List<Track> allies
+    ) {
+        WorldState(Track player, List<Track> enemies, List<Track> projectiles, long frameTimeMs,
+                   float captureAgeMs, Vec2 globalFrameShift, float quality) {
+            this(player,enemies,projectiles,frameTimeMs,captureAgeMs,globalFrameShift,quality,List.of());
+        }
+    }
 
     record ControlCommand(Vec2 move, Vec2 aim, boolean fire, boolean superAttack, String reason) {
         static ControlCommand idle(String reason) {
@@ -132,6 +138,7 @@ final class AgentCore {
         WorldState s = lastState;
         if (s == null) return "state=none";
         return "q=" + fmt(s.quality())
+                + " allies=" + s.allies().size()
                 + " enemies=" + s.enemies().size()
                 + " shots=" + s.projectiles().size()
                 + " nav=" + navigationStatus
@@ -144,6 +151,7 @@ final class AgentCore {
         VisionPipeline() { this(false); }
         VisionPipeline(boolean hudOnly) { this.hudOnly = hudOnly; }
         private TrackManager playerTracks = new TrackManager(Kind.PLAYER, 0.12f, 2);
+        private TrackManager allyTracks = new TrackManager(Kind.ALLY, 0.14f, 3);
         private TrackManager enemyTracks = new TrackManager(Kind.ENEMY, 0.17f, 4);
         private TrackManager projectileTracks = new TrackManager(Kind.PROJECTILE, 0.20f, 3);
         private GlobalMotionEstimator globalMotion = new GlobalMotionEstimator();
@@ -155,6 +163,7 @@ final class AgentCore {
 
         private void reset() {
             playerTracks = new TrackManager(Kind.PLAYER, 0.12f, 2);
+            allyTracks = new TrackManager(Kind.ALLY, 0.14f, 3);
             enemyTracks = new TrackManager(Kind.ENEMY, 0.17f, 4);
             projectileTracks = new TrackManager(Kind.PROJECTILE, 0.20f, 3);
             globalMotion = new GlobalMotionEstimator();
@@ -188,8 +197,10 @@ final class AgentCore {
             List<Detection> bars = healthBars(b);
             List<Detection> playerDetections = new ArrayList<>();
             List<Detection> enemyDetections = new ArrayList<>();
+            List<Detection> allyDetections = new ArrayList<>();
             for (Detection d : bars) {
                 if (d.kind() == Kind.PLAYER) playerDetections.add(d);
+                else if (d.kind() == Kind.ALLY) allyDetections.add(d);
                 else enemyDetections.add(d);
             }
             // Keep the synthetic baseline only when no game HUD is present.
@@ -206,6 +217,7 @@ final class AgentCore {
 
             // All actor velocities use the same camera-compensated coordinate frame.
             List<Track> players = playerTracks.update(playerDetections, dt, frameShift);
+            List<Track> allies = allyTracks.update(allyDetections, dt, frameShift);
             List<Track> enemies = enemyTracks.update(enemyDetections, dt, frameShift);
             List<Track> projectiles = projectileTracks.update(projectileDetections, dt, frameShift);
 
@@ -229,7 +241,7 @@ final class AgentCore {
                     nowMs,
                     clamp(captureAgeMs, 0f, 500f),
                     frameShift,
-                    clamp(quality, 0f, 1f)
+                    clamp(quality, 0f, 1f), visibleTracks(allies, .38f, 4)
             );
         }
 
@@ -246,6 +258,7 @@ final class AgentCore {
                     int c = b.getPixel(x, y), r = Color.red(c), g = Color.green(c), bl = Color.blue(c);
                     if (g > 145 && g > r * 1.25f && g > bl * 1.2f) mask[y * w + x] = 1;
                     else if (r > 155 && g < 145 && r > g * 1.35f && r > bl * 1.08f) mask[y * w + x] = 2;
+                    else if (bl > 160 && g > 85 && bl > r * 1.45f && bl > g * 1.12f) mask[y * w + x] = 3;
                 }
             }
             int[] queue = healthQueue;
@@ -293,7 +306,7 @@ final class AgentCore {
                 float cx = (minX + fullWidth / 2f) / w;
                 float cy = (minY + bh / 2f + h * .085f) / h;
                 if (cy > .94f) continue;
-                bars.add(new Detection(kind == 1 ? Kind.PLAYER : Kind.ENEMY,
+                bars.add(new Detection(kind == 1 ? Kind.PLAYER : kind == 3 ? Kind.ALLY : Kind.ENEMY,
                         new Vec2(cx, cy), .025f, .88f));
             }
             // Orange ammunition segments immediately beneath our own HP are not enemies.
@@ -392,7 +405,7 @@ final class AgentCore {
             List<Detection> out = new ArrayList<>();
             int minCells = switch (kind) {
                 case PLAYER -> 7;
-                case ENEMY -> 6;
+                case ENEMY, ALLY -> 6;
                 case PROJECTILE -> 2;
             };
 
@@ -441,7 +454,7 @@ final class AgentCore {
                 float fill = count / bboxCells;
                 float sizeScore = switch (kind) {
                     case PLAYER -> smoothBand(radius, 0.018f, 0.100f);
-                    case ENEMY -> smoothBand(radius, 0.012f, 0.110f);
+                    case ENEMY, ALLY -> smoothBand(radius, 0.012f, 0.110f);
                     case PROJECTILE -> smoothBand(radius, 0.0025f, 0.052f);
                 };
                 float densityScore = clamp(fill * 1.55f, 0f, 1f);
