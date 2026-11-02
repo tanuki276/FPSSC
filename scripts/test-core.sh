@@ -26,6 +26,7 @@ java -cp "$build_dir" com.tanuki276.fpssc.PracticeCombatPolicyTest
 java -cp "$build_dir" com.tanuki276.fpssc.PracticeCombatBenchmarkTest
 java -cp "$build_dir" com.tanuki276.fpssc.PracticeOpponentModelTest
 java -cp "$build_dir" com.tanuki276.fpssc.PracticeTacticalPlannerTest
+java -cp "$build_dir" com.tanuki276.fpssc.PracticeCombatStressTest
 if [[ $# -gt 0 ]]; then
     java -cp "$build_dir" com.tanuki276.fpssc.ScreenshotRegressionTest "$@"
 fi
