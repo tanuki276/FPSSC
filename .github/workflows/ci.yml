@@ -35,7 +35,7 @@ jobs:
           name: FSCSR-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-      - run: '"$ANDROID_HOME/build-tools/35.1.0/apksigner" verify --verbose --print-certs android/app/build/outputs/apk/release/app-release.apk > android/app/build/outputs/apk/release/SIGNING-CERT.txt'
+      - run: '"$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs android/app/build/outputs/apk/release/app-release.apk > android/app/build/outputs/apk/release/SIGNING-CERT.txt'
       - uses: actions/upload-artifact@v4
         with:
           name: FSCSR-release-apk
