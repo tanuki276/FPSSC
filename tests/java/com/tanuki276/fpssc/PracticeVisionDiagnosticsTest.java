@@ -24,6 +24,13 @@ public final class PracticeVisionDiagnosticsTest {
         return b;
     }
 
+    private static Bitmap sceneFlash(int w,int h) {
+        Bitmap b=new Bitmap(w,h);
+        int c=rgb(190,185,178);
+        for(int y=0;y<h;y++) for(int x=0;x<w;x++) b.setPixel(x,y,c);
+        return b;
+    }
+
     public static void main(String[] args) {
         PracticeVisionDiagnostics vision=new PracticeVisionDiagnostics();
         int w=200,h=130;
@@ -43,6 +50,11 @@ public final class PracticeVisionDiagnosticsTest {
         check(third.motionConfidence()>.20f,"stable motion should have non-trivial confidence");
         check(third.frameChange()<.12f,"small moving object should not look like a full-frame scene change");
         check(third.compact().contains("box="),"compact diagnostics should expose box count");
+
+        PracticeVisionDiagnostics.Result flash=vision.analyze(FramePixels.copy(sceneFlash(w,h)),1180);
+        check(flash.frameChange()>.16f,"large scene transition should be recognized as global change");
+        check(flash.stableMovingObjects()==0,"global scene change must not be trusted as moving objects");
+        check(flash.motionConfidence()==0f,"global scene change must zero motion confidence");
 
         System.out.println("PracticeVisionDiagnosticsTest OK");
     }
