@@ -11,7 +11,7 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-/** Compact translucent practice controls plus a touch-through diagnostic strip. */
+/** Compact translucent practice controls plus an optional touch-through diagnostic strip. */
 final class GameOverlay {
     private final AccessibilityService service;
     private final WindowManager manager;
@@ -29,10 +29,10 @@ final class GameOverlay {
             if(controls==null) return;
             toggle.setText(TouchService.isArmed()?"AI ON":"AI OFF");
             profile.setText(PracticeProfileStore.compactLabel(service));
+            diagnostics.setVisibility(expanded?View.VISIBLE:View.GONE);
             diagnostics.setMaxLines(expanded?10:2);
-            diagnostics.setText(expanded
-                    ? "FSCSR " + BuildConfig.VERSION_NAME + "\n" + AgentService.status + "\n" + TouchService.diagnostics()
-                    : AgentService.overlayStatus + "\n" + TouchService.inputStatus);
+            if(expanded) diagnostics.setText("FSCSR " + BuildConfig.VERSION_NAME + "\n" + AgentService.status
+                    + "\n" + TouchService.diagnostics());
             updateExclusions();
             handler.postDelayed(this,300);
         }
@@ -57,24 +57,24 @@ final class GameOverlay {
     }
 
     private void compactButton(Button b,int widthDp) {
-        b.setTextSize(10.5f);
+        b.setTextSize(10f);
         b.setAllCaps(false);
         b.setMinHeight(0);
         b.setMinimumHeight(0);
         b.setMinWidth(0);
         b.setMinimumWidth(0);
-        b.setPadding(dp(5),0,dp(5),0);
-        b.setAlpha(.84f);
-        controls.addView(b,new LinearLayout.LayoutParams(dp(widthDp),dp(34)));
+        b.setPadding(dp(4),0,dp(4),0);
+        b.setAlpha(.82f);
+        controls.addView(b,new LinearLayout.LayoutParams(dp(widthDp),dp(32)));
     }
 
     void show() {
         if(controls!=null) return;
         controls=new LinearLayout(service);
         controls.setOrientation(LinearLayout.HORIZONTAL);
-        controls.setPadding(dp(2),dp(2),dp(2),dp(2));
-        controls.setBackgroundColor(0x38202020);
-        controls.setAlpha(.92f);
+        controls.setPadding(dp(1),dp(1),dp(1),dp(1));
+        controls.setBackgroundColor(0x30202020);
+        controls.setAlpha(.90f);
 
         toggle=new Button(service);
         toggle.setText("AI OFF");
@@ -86,7 +86,7 @@ final class GameOverlay {
             TouchService.arm(!TouchService.isArmed());
             toggle.setText(TouchService.isArmed()?"AI ON":"AI OFF");
         });
-        compactButton(toggle,64);
+        compactButton(toggle,58);
 
         profile=new Button(service);
         profile.setText(PracticeProfileStore.compactLabel(service));
@@ -99,29 +99,32 @@ final class GameOverlay {
             profile.setText(PracticeProfileStore.compactLabel(service));
             return true;
         });
-        compactButton(profile,128);
+        compactButton(profile,112);
 
         details=new Button(service);
         details.setText("⋯");
         details.setOnClickListener(v->{
             expanded=!expanded;
             details.setText(expanded?"×":"⋯");
+            diagnostics.setVisibility(expanded?View.VISIBLE:View.GONE);
+            updateExclusions();
         });
-        compactButton(details,38);
+        compactButton(details,30);
 
         diagnostics=new TextView(service);
         diagnostics.setTextSize(9f);
         diagnostics.setTextColor(0xffeeeeee);
         diagnostics.setShadowLayer(2,1,1,0xff000000);
-        diagnostics.setBackgroundColor(0x26202020);
+        diagnostics.setBackgroundColor(0x24202020);
         diagnostics.setPadding(dp(4),dp(1),dp(4),dp(1));
-        diagnostics.setMaxLines(2);
-        diagnostics.setAlpha(.86f);
+        diagnostics.setMaxLines(10);
+        diagnostics.setAlpha(.84f);
+        diagnostics.setVisibility(View.GONE);
 
         try {
-            manager.addView(controls,params(dp(234),dp(38),0,0));
+            manager.addView(controls,params(dp(203),dp(34),0,0));
             manager.addView(diagnostics,params(dp(300),WindowManager.LayoutParams.WRAP_CONTENT,
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,dp(39)));
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,dp(35)));
             controls.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->updateExclusions());
             diagnostics.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->updateExclusions());
             handler.post(refresh);
