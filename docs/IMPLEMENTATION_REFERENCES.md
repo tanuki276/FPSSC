@@ -40,3 +40,16 @@ held pointers. `GestureEngine` starts a new attack pointer 1 ms after the contin
 movement pointer, keeping both in the same 80 ms gesture. The Android integration
 test asserts one movement DOWN, repeated attacks, two-pointer delivery and final
 release; it does not merely check that dispatchGesture returns true.
+
+## FSCSR 4.0 follow-up
+
+The Android 11 MotionEventInjector source above also rejects an empty generated
+event list. A stationary continued movement pointer with no attack can produce
+zero events. When pacing attacks, GestureEngine uses a 2px out-and-back path
+only for an otherwise stationary movement-only continuation; its endpoint and
+pointer identity stay unchanged. The emulator regression covers these intervals.
+
+The transparent UI uses Android's documented
+[TYPE_ACCESSIBILITY_OVERLAY](https://developer.android.com/reference/android/view/WindowManager.LayoutParams#TYPE_ACCESSIBILITY_OVERLAY).
+Controls and touch-through diagnostics are separate windows. No external
+model weights or bot source have been imported for 4.0.

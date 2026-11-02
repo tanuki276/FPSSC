@@ -51,6 +51,10 @@ final class GestureEngine {
             Path path=new Path();
             path.moveTo(movement==null?c.profile().moveX()*c.width():moveX,
                     movement==null?c.profile().moveY()*c.height():moveY);
+            // Android 11 rejects an empty event list: a stationary continuation with no
+            // attack produces no MotionEvent. A 2px out-and-back keeps the held stick alive.
+            if(movement!=null && !fire && Math.abs(moveX-x)<.5f && Math.abs(moveY-y)<.5f)
+                path.lineTo(clip(x+(x>c.width()-3?-2:2),c.width()),y);
             path.lineTo(x,y);
             nextMovement=movement==null?new GestureDescription.StrokeDescription(path,0,SLICE_MS,true)
                     :movement.continueStroke(path,0,SLICE_MS,true);
