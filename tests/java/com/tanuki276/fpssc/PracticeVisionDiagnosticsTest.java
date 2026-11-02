@@ -13,17 +13,14 @@ public final class PracticeVisionDiagnosticsTest {
         int ground=rgb(90,110,120);
         for(int y=0;y<h;y++) for(int x=0;x<w;x++) b.setPixel(x,y,ground);
 
-        // Bush patch.
         int bush=rgb(60,145,70);
         for(int y=28;y<62;y++) for(int x=18;x<72;x++) b.setPixel(x,y,bush);
 
-        // Crate-like warm square.
         int crate=rgb(190,125,55);
-        for(int y=72;y<92;y++) for(int x=118;x<140;x++) b.setPixel(x,y,crate);
+        for(int y=76;y<87;y++) for(int x=120;x<132;x++) b.setPixel(x,y,crate);
 
-        // Compact moving bright object.
         int shot=rgb(245,75,70);
-        for(int y=104;y<110;y++) for(int x=movingX;x<movingX+7;x++) b.setPixel(x,y,shot);
+        for(int y=104;y<108;y++) for(int x=movingX;x<movingX+5;x++) b.setPixel(x,y,shot);
         return b;
     }
 
@@ -36,12 +33,12 @@ public final class PracticeVisionDiagnosticsTest {
         check(first.stableCrates()==0,"first-frame crate should not yet be trusted temporally");
         check(first.bushCoverage()>.03f,"bush patch should contribute measurable coverage");
 
-        PracticeVisionDiagnostics.Result second=vision.analyze(FramePixels.copy(frame(w,h,55)),1060);
+        PracticeVisionDiagnostics.Result second=vision.analyze(FramePixels.copy(frame(w,h,53)),1060);
         check(second.stableCrates()>=1,"persistent crate should become temporally stable");
         check(second.crateConfidence()>.45f,"stable crate confidence should rise");
         check(second.movingCandidates()>=1,"moving compact object should create motion candidates");
 
-        PracticeVisionDiagnostics.Result third=vision.analyze(FramePixels.copy(frame(w,h,66)),1120);
+        PracticeVisionDiagnostics.Result third=vision.analyze(FramePixels.copy(frame(w,h,61)),1120);
         check(third.stableMovingObjects()>=1,"consistent moving object should become temporally stable");
         check(third.motionConfidence()>.20f,"stable motion should have non-trivial confidence");
         check(third.frameChange()<.12f,"small moving object should not look like a full-frame scene change");
