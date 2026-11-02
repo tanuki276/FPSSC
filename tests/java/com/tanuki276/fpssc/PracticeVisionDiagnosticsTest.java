@@ -1,0 +1,52 @@
+package com.tanuki276.fpssc;
+
+import android.graphics.Bitmap;
+
+public final class PracticeVisionDiagnosticsTest {
+    private static void check(boolean ok,String message) {
+        if(!ok) throw new AssertionError(message);
+    }
+    private static int rgb(int r,int g,int b) { return 0xff000000|(r<<16)|(g<<8)|b; }
+
+    private static Bitmap frame(int w,int h,int movingX) {
+        Bitmap b=new Bitmap(w,h);
+        int ground=rgb(90,110,120);
+        for(int y=0;y<h;y++) for(int x=0;x<w;x++) b.setPixel(x,y,ground);
+
+        // Bush patch.
+        int bush=rgb(60,145,70);
+        for(int y=28;y<62;y++) for(int x=18;x<72;x++) b.setPixel(x,y,bush);
+
+        // Crate-like warm square.
+        int crate=rgb(190,125,55);
+        for(int y=72;y<92;y++) for(int x=118;x<140;x++) b.setPixel(x,y,crate);
+
+        // Compact moving bright object.
+        int shot=rgb(245,75,70);
+        for(int y=104;y<110;y++) for(int x=movingX;x<movingX+7;x++) b.setPixel(x,y,shot);
+        return b;
+    }
+
+    public static void main(String[] args) {
+        PracticeVisionDiagnostics vision=new PracticeVisionDiagnostics();
+        int w=200,h=130;
+
+        PracticeVisionDiagnostics.Result first=vision.analyze(FramePixels.copy(frame(w,h,45)),1000);
+        check(first.crateCandidates()>=1,"crate-like object should be detected as a candidate");
+        check(first.stableCrates()==0,"first-frame crate should not yet be trusted temporally");
+        check(first.bushCoverage()>.03f,"bush patch should contribute measurable coverage");
+
+        PracticeVisionDiagnostics.Result second=vision.analyze(FramePixels.copy(frame(w,h,55)),1060);
+        check(second.stableCrates()>=1,"persistent crate should become temporally stable");
+        check(second.crateConfidence()>.45f,"stable crate confidence should rise");
+        check(second.movingCandidates()>=1,"moving compact object should create motion candidates");
+
+        PracticeVisionDiagnostics.Result third=vision.analyze(FramePixels.copy(frame(w,h,66)),1120);
+        check(third.stableMovingObjects()>=1,"consistent moving object should become temporally stable");
+        check(third.motionConfidence()>.20f,"stable motion should have non-trivial confidence");
+        check(third.frameChange()<.12f,"small moving object should not look like a full-frame scene change");
+        check(third.compact().contains("box="),"compact diagnostics should expose box count");
+
+        System.out.println("PracticeVisionDiagnosticsTest OK");
+    }
+}
