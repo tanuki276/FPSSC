@@ -39,6 +39,8 @@ public final class CombatRegressionTest {
         ControlCommand routed=nav.route(world(1000),forward);
         check(!routed.fire(),"Do not shoot through brick");
         check(Math.abs(routed.move().y())>.2,"Detour around a blocking wall");
+        ControlCommand dodge=nav.route(world(1033),new ControlCommand(new Vec2(0,-1),new Vec2(1,0),false,false,"dodge ttc=0.1"));
+        check(dodge.move().y()<-.8f,"Wall-occluded aim must not override an urgent dodge");
         Bitmap water=new Bitmap(640,320); rect(water,280,100,24,120,0xff209cdd);
         nav.update(FramePixels.copy(water),world(1033));
         check(nav.blocked(new Vec2(.8f,.5f),new Vec2(1.1f,.5f),true),"Water must block walking");

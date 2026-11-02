@@ -144,6 +144,8 @@ final class AgentCore {
         private TrackManager projectileTracks = new TrackManager(Kind.PROJECTILE, 0.20f, 3);
         private GlobalMotionEstimator globalMotion = new GlobalMotionEstimator();
         private long previousFrameMs;
+        private byte[] healthMask;
+        private int[] healthQueue;
         private int previousWidth;
         private int previousHeight;
 
@@ -230,7 +232,10 @@ final class AgentCore {
         /** Brawl Stars HUD anchors: compact horizontal health fill plus white HP text above. */
         private List<Detection> healthBars(FramePixels b) {
             int w = b.getWidth(), h = b.getHeight();
-            byte[] mask = new byte[w * h];
+            if (healthMask == null || healthMask.length != w*h) {
+                healthMask = new byte[w*h]; healthQueue = new int[w*h];
+            } else java.util.Arrays.fill(healthMask, (byte)0);
+            byte[] mask = healthMask;
             for (int y = (int)(h * .07f); y < h * .88f; y++) {
                 for (int x = (int)(w * .03f); x < w * .97f; x++) {
                     if ((x < w * .20f || x > w * .80f) && y > h * .69f) continue;
@@ -239,7 +244,7 @@ final class AgentCore {
                     else if (r > 155 && g < 145 && r > g * 1.35f && r > bl * 1.08f) mask[y * w + x] = 2;
                 }
             }
-            int[] queue = new int[mask.length];
+            int[] queue = healthQueue;
             List<Detection> bars = new ArrayList<>();
             for (int start = 0; start < mask.length; start++) {
                 byte kind = mask[start];

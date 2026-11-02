@@ -48,10 +48,15 @@ final class CombatNavigator {
         // Character artwork can share a wall palette; never classify its immediate body as terrain.
         java.util.ArrayList<Track> actors=new java.util.ArrayList<>(world.enemies());
         if(world.player()!=null) actors.add(world.player());
-        for(int y=0;y<rows;y++) for(int x=0;x<cols;x++) {
-            Vec2 point=new Vec2((x+.5f)/cols*aspect,(y+.5f)/rows);
-            for(Track actor:actors) if(actor.observed() && point.sub(actor.pos()).len()<.055f) {
-                terrain[y*cols+x]=0; break;
+        for(Track actor:actors) {
+            if(!actor.observed()) continue;
+            int left=Math.max(0,(int)((actor.pos().x()-.055f)/aspect*cols));
+            int right=Math.min(cols-1,(int)((actor.pos().x()+.055f)/aspect*cols));
+            int top=Math.max(0,(int)((actor.pos().y()-.055f)*rows));
+            int bottom=Math.min(rows-1,(int)((actor.pos().y()+.055f)*rows));
+            for(int y=top;y<=bottom;y++) for(int x=left;x<=right;x++) {
+                float dx=(x+.5f)/cols*aspect-actor.pos().x(), dy=(y+.5f)/rows-actor.pos().y();
+                if(dx*dx+dy*dy<.055f*.055f) terrain[y*cols+x]=0;
             }
         }
         long now=world.frameTimeMs();
@@ -101,7 +106,8 @@ final class CombatNavigator {
             Vec2 d=e.pos().sub(p);
             if(d.norm().dot(c.aim())>.92f) targetDistance=Math.min(targetDistance,d.len());
         }
-        boolean occluded=blocked(p.add(c.aim().mul(.045f)),p.add(c.aim().mul(targetDistance)),false);
+        boolean dodging=c.reason().startsWith("dodge");
+        boolean occluded=!dodging && c.aim().len()>.1f && blocked(p.add(c.aim().mul(.045f)),p.add(c.aim().mul(targetDistance)),false);
         if(occluded) { fire=false; reason+=" / wall blocks aim"; desired=c.aim(); }
         if(stalledSince!=0 && s.frameTimeMs()-stalledSince>750 && s.frameTimeMs()>=escapeUntil) {
             escapeUntil=s.frameTimeMs()+650;
@@ -109,7 +115,7 @@ final class CombatNavigator {
             if(blocked(p,p.add(escape.mul(.12f)),true)) escape=escape.mul(-1);
             stalledSince=0;
         }
-        boolean escaping=s.frameTimeMs()<escapeUntil;
+        boolean escaping=!dodging && s.frameTimeMs()<escapeUntil;
         if(escaping) { desired=escape; reason+=" / unstuck"; }
         Vec2 best=new Vec2(0,0); float score=-Float.MAX_VALUE;
         for(int i=0;i<24;i++) {
