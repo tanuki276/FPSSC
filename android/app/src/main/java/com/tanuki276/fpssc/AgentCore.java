@@ -70,6 +70,22 @@ final class AgentCore {
     AgentCore(boolean hudOnly) { vision = new VisionPipeline(hudOnly); }
     private final TacticalPolicy policy = new TacticalPolicy();
     private volatile WorldState lastState;
+    private final CombatNavigator navigator = new CombatNavigator();
+    private String navigationStatus = "";
+    WorldState state() { return lastState; }
+    static Vec2 metric(Vec2 v, float aspect) { return new Vec2(v.x() * aspect, v.y()); }
+    static Vec2 screenDirection(Vec2 v, float aspect) {
+        return new Vec2(v.x() / aspect, v.y()).norm().mul(v.len());
+    }
+    private static Track metric(Track t, float aspect) {
+        return new Track(t.id(), t.kind(), metric(t.pos(), aspect), metric(t.velocity(), aspect),
+                metric(t.acceleration(), aspect), t.radius(), t.confidence(), t.ageFrames(), t.observed());
+    }
+    private static List<Track> metric(List<Track> tracks, float aspect) {
+        List<Track> out = new ArrayList<>();
+        for (Track t : tracks) out.add(metric(t, aspect));
+        return out;
+    }
     private float pipelineLatencyEwmaMs = 12f;
 
     ControlCommand analyze(Bitmap frame, long nowMs) {
@@ -83,7 +99,19 @@ final class AgentCore {
     ControlCommand analyzePixels(FramePixels frame, long nowMs, float captureAgeMs) {
         WorldState state = vision.detectPixels(frame, nowMs, captureAgeMs);
         lastState = state;
-        return policy.decide(state, pipelineLatencyEwmaMs);
+        if (frame == null) return ControlCommand.idle("invalid frame");
+        float aspect = frame.getWidth() / (float) frame.getHeight();
+        WorldState physical = new WorldState(state.player() == null ? null : metric(state.player(), aspect),
+                metric(state.enemies(), aspect), metric(state.projectiles(), aspect), nowMs,
+                captureAgeMs, metric(state.globalFrameShift(), aspect), state.quality());
+        navigator.update(frame, physical);
+        policy.arenaWidth = aspect;
+        policy.navigator = navigator;
+        ControlCommand decision = policy.decide(physical, pipelineLatencyEwmaMs);
+        ControlCommand routed = navigator.route(physical, decision);
+        navigationStatus = routed.reason();
+        return new ControlCommand(screenDirection(routed.move(), aspect),
+                screenDirection(routed.aim(), aspect), routed.fire(), routed.superAttack(), routed.reason());
     }
 
     void observePipelineLatency(float elapsedMs) {
@@ -102,6 +130,7 @@ final class AgentCore {
         return "q=" + fmt(s.quality())
                 + " enemies=" + s.enemies().size()
                 + " shots=" + s.projectiles().size()
+                + " nav=" + navigationStatus
                 + " shift=" + fmt(s.globalFrameShift().x()) + "," + fmt(s.globalFrameShift().y())
                 + " queueExtra=" + fmt(s.captureAgeMs()) + "ms pipeline=" + fmt(pipelineLatencyEwmaMs) + "ms";
     }
@@ -162,16 +191,15 @@ final class AgentCore {
                 playerDetections = connectedComponents(b, Kind.PLAYER, 0.12f, 0.88f, 0.12f, 0.90f, 4);
                 enemyDetections = connectedComponents(b, Kind.ENEMY, 0.03f, 0.97f, 0.04f, 0.94f, 14);
             }
-            List<Detection> projectileDetections = connectedComponents(b, Kind.PROJECTILE, 0.22f, 0.78f, 0.08f, 0.83f, 28);
+            List<Detection> projectileDetections = connectedComponents(b, Kind.PROJECTILE, 0.04f, 0.96f, 0.08f, 0.90f, 40);
 
             playerDetections.sort(Comparator.comparingDouble(d -> -playerScore(d)));
             if (playerDetections.size() > 2) {
                 playerDetections = new ArrayList<>(playerDetections.subList(0, 2));
             }
 
-            // The camera tends to follow the player, so do not force global background motion
-            // onto the player track. It is valuable for enemy/projectile association, however.
-            List<Track> players = playerTracks.update(playerDetections, dt, new Vec2(0, 0));
+            // All actor velocities use the same camera-compensated coordinate frame.
+            List<Track> players = playerTracks.update(playerDetections, dt, frameShift);
             List<Track> enemies = enemyTracks.update(enemyDetections, dt, frameShift);
             List<Track> projectiles = projectileTracks.update(projectileDetections, dt, frameShift);
 
@@ -203,12 +231,12 @@ final class AgentCore {
         private List<Detection> healthBars(FramePixels b) {
             int w = b.getWidth(), h = b.getHeight();
             byte[] mask = new byte[w * h];
-            for (int y = (int)(h * .10f); y < h * .83f; y++) {
-                for (int x = (int)(w * .05f); x < w * .95f; x++) {
-                    if ((x < w * .22f || x > w * .78f) && y > h * .55f) continue;
+            for (int y = (int)(h * .07f); y < h * .88f; y++) {
+                for (int x = (int)(w * .03f); x < w * .97f; x++) {
+                    if ((x < w * .20f || x > w * .80f) && y > h * .69f) continue;
                     int c = b.getPixel(x, y), r = Color.red(c), g = Color.green(c), bl = Color.blue(c);
                     if (g > 145 && g > r * 1.25f && g > bl * 1.2f) mask[y * w + x] = 1;
-                    else if (r > 160 && g < 115 && r > g * 1.6f && r > bl * 1.25f) mask[y * w + x] = 2;
+                    else if (r > 155 && g < 145 && r > g * 1.35f && r > bl * 1.08f) mask[y * w + x] = 2;
                 }
             }
             int[] queue = new int[mask.length];
@@ -232,8 +260,8 @@ final class AgentCore {
                     }
                 }
                 int bw = maxX - minX + 1, bh = maxY - minY + 1;
-                if (bw < h * .025f || bw > h * .15f || bh < 1 || bh > h * .025f
-                        || bw < bh * 2.2f || tail < bw * bh * .40f) continue;
+                if (bw < h * .009f || bw > h * .15f || bh < 1 || bh > h * .025f
+                        || (bw < bh * 2.2f && bw >= h * .025f) || tail < bw * bh * .40f) continue;
                 int fullWidth = Math.max(bw, Math.round(h * .09f));
                 int white = 0;
                 for (int y = Math.max(0, minY - Math.round(h * .035f)); y < minY; y++) {
@@ -255,7 +283,7 @@ final class AgentCore {
                 if (darkBorder < fullWidth * .30f) continue;
                 float cx = (minX + fullWidth / 2f) / w;
                 float cy = (minY + bh / 2f + h * .085f) / h;
-                if (cy > .83f) continue;
+                if (cy > .94f) continue;
                 bars.add(new Detection(kind == 1 ? Kind.PLAYER : Kind.ENEMY,
                         new Vec2(cx, cy), .025f, .88f));
             }
@@ -263,7 +291,18 @@ final class AgentCore {
             bars.removeIf(d -> d.kind() == Kind.ENEMY && bars.stream().anyMatch(p ->
                     p.kind() == Kind.PLAYER && Math.abs(p.pos().x() - d.pos().x()) < .055f
                     && Math.abs(p.pos().y() - d.pos().y()) < .06f));
-            return bars;
+            // The same actor's bright face/armor below an HP bar is not another HP bar.
+            // Candidates arrive top-to-bottom; keep the upper HUD anchor in each body-sized region.
+            List<Detection> distinct = new ArrayList<>();
+            for (Detection d : bars) {
+                boolean duplicate = false;
+                for (Detection kept : distinct) {
+                    if (kept.kind() == d.kind() && Math.abs(kept.pos().x()-d.pos().x()) < .04f
+                            && d.pos().y()-kept.pos().y() < .12f) { duplicate=true; break; }
+                }
+                if (!duplicate) distinct.add(d);
+            }
+            return distinct;
         }
 
         private float playerScore(Detection d) {
@@ -461,7 +500,11 @@ final class AgentCore {
             int r = Color.red(c), g = Color.green(c), b = Color.blue(c);
             int max = Math.max(r, Math.max(g, b));
             int min = Math.min(r, Math.min(g, b));
-            if (kind == Kind.PROJECTILE && (r < 175 || g < 135 || b > 145 || Math.min(r, g) - b < 65)) return 0f;
+            if (kind == Kind.PROJECTILE) {
+                boolean warm = r > 175 && g > 135 && b < 145 && Math.min(r, g) - b > 65;
+                boolean hostile = r > 195 && r > g * 1.4f && (b > 125 || g < 95);
+                return warm || hostile ? .9f : 0f;
+            }
             int chroma = max - min;
             int sum = r + g + b;
             if (max < 55 || sum < 165 || chroma < 18) return 0f;
@@ -727,6 +770,8 @@ final class AgentCore {
         private Vec2 previousAim = new Vec2(0, 0);
         private int stableAimFrames;
         private int targetId = -1;
+        float arenaWidth = 1f;
+        CombatNavigator navigator;
 
         ControlCommand decide(WorldState s, float pipelineLatencyMs) {
             Track p = s.player();
@@ -765,7 +810,7 @@ final class AgentCore {
             Vec2 toEnemy = enemyNow.sub(playerNow);
             float distance = toEnemy.len();
             Vec2 relativeVelocity = enemy.velocity().sub(p.velocity());
-            Vec2 relativeAcceleration = enemy.acceleration().sub(p.acceleration());
+            Vec2 relativeAcceleration = enemy.acceleration().sub(p.acceleration()).clampLen(1.5f);
             Vec2 rawAim = interceptAim(playerNow, enemyNow, relativeVelocity, relativeAcceleration, PROJECTILE_SPEED);
 
             float aimBlend = clamp(0.34f + enemy.confidence() * 0.48f, 0.34f, 0.84f);
@@ -820,6 +865,8 @@ final class AgentCore {
                         - d * 0.68f
                         - Math.min(e.acceleration().len(), 6f) * 0.012f;
                 if (!e.observed()) score -= 0.19f;
+                if (e.id() == targetId) score += .16f;
+                if (navigator != null && navigator.blocked(playerNow, current, false)) score -= .8f;
                 if (score > bestScore) {
                     bestScore = score;
                     best = e;
@@ -874,11 +921,16 @@ final class AgentCore {
             Vec2 b = a.mul(-1f);
             Vec2 pa = player.add(a.mul(0.17f));
             Vec2 pb = player.add(b.mul(0.17f));
-            return edgeSafety(pa) >= edgeSafety(pb) ? a : b;
+            float sa = edgeSafety(pa), sb = edgeSafety(pb);
+            if (navigator != null) {
+                if (navigator.blocked(player, pa, true)) sa -= 3;
+                if (navigator.blocked(player, pb, true)) sb -= 3;
+            }
+            return sa >= sb ? a : b;
         }
 
         private float edgeSafety(Vec2 p) {
-            float edge = Math.min(Math.min(p.x(), 1f - p.x()), Math.min(p.y(), 1f - p.y()));
+            float edge = Math.min(Math.min(p.x(), arenaWidth - p.x()), Math.min(p.y(), 1f - p.y()));
             return clamp(edge / 0.22f, -1f, 1f);
         }
 

@@ -16,6 +16,7 @@ public final class TouchService extends AccessibilityService {
     private final Handler main=new Handler(Looper.getMainLooper());
     private final java.util.concurrent.atomic.AtomicBoolean pending=new java.util.concurrent.atomic.AtomicBoolean();
     private GestureEngine engine;
+    private GameOverlay overlay;
     private volatile String foreground="未確認";
     private static volatile String lastGameStatus="まだゲーム中の操作要求はありません";
     private static volatile long lastGameAt;
@@ -52,16 +53,26 @@ public final class TouchService extends AccessibilityService {
         });
     }
     @Override protected void onServiceConnected() {
-        android.util.Log.i("FPSSC","touch service connected pid="+android.os.Process.myPid());
+        android.util.Log.i("FSCSR","touch service connected pid="+android.os.Process.myPid());
         instance=this;
         engine=new GestureEngine(this,()->armed&&gameActive(),message->{ arm(false); gameStatus(message); });
         arm(false);
+        overlay=new GameOverlay(this);
+        overlay.show();
     }
-    // Input decisions query the active window, not a cached event package from FPSSC's setup screen.
+    // Input decisions query the active window, not a cached event package from FSCSR's setup screen.
     private boolean gameActive() {
         AccessibilityNodeInfo root=null;
         try {
-            root=getRootInActiveWindow();
+            // A trusted overlay must not become the foreground application for the input gate.
+            java.util.List<android.view.accessibility.AccessibilityWindowInfo> windows=getWindows();
+            try {
+                for(android.view.accessibility.AccessibilityWindowInfo window:windows) {
+                    if(window.getType()==android.view.accessibility.AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY) continue;
+                    if(window.isActive() || window.isFocused()) { root=window.getRoot(); break; }
+                }
+            } finally { for(android.view.accessibility.AccessibilityWindowInfo window:windows) window.recycle(); }
+            if(root==null) root=getRootInActiveWindow();
             foreground=root==null||root.getPackageName()==null?"ウィンドウ未取得（操作サービスを OFF/ON）":root.getPackageName().toString();
             return GAME.equals(foreground);
         } catch(RuntimeException e) { foreground="取得失敗"; return false; }
@@ -73,6 +84,7 @@ public final class TouchService extends AccessibilityService {
     @Override public void onInterrupt() { arm(false); }
     @Override public void onDestroy() {
         arm(false); instance=null;
+        if(overlay!=null) overlay.hide();
         if(engine!=null) engine.stop();
         super.onDestroy();
     }
@@ -93,6 +105,7 @@ public final class TouchService extends AccessibilityService {
         gameStatus("操作要求: move="+command.move()+" fire="+command.fire());
         engine.offer(command,profile,time,width,height);
     }
+    boolean overlayVisible() { return overlay!=null && overlay.visible(); }
     // Package-private, no exported entry point; instrumentation can test actual dispatch without spoofing a game package.
     static TouchService instrumentationInstance() { return BuildConfig.DEBUG?instance:null; }
     GestureEngine instrumentationEngine(java.util.function.BooleanSupplier allowed,java.util.function.Consumer<String> failure) {

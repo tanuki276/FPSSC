@@ -22,6 +22,7 @@ final class GestureEngine {
     private GestureDescription.StrokeDescription movement;
     private float moveX,moveY;
     private long sequence;
+    private long nextAttackAt;
     long sent,completed,cancelled;
     GestureEngine(AccessibilityService service,BooleanSupplier allowed,Consumer<String> failure) {
         this.service=service; this.allowed=allowed; this.failure=failure;
@@ -37,7 +38,8 @@ final class GestureEngine {
         Command c=latest;
         long age=c==null?Long.MAX_VALUE:SystemClock.elapsedRealtime()-c.time();
         if(c==null||age<0||age>200||!allowed.getAsBoolean()) { latest=null; release(); return; }
-        boolean moving=c.controls().move().len()>.01f,fire=c.controls().fire()&&c.controls().aim().len()>.01f;
+        boolean moving=c.controls().move().len()>.01f,fire=c.controls().fire()&&c.controls().aim().len()>.01f
+                && SystemClock.elapsedRealtime()>=nextAttackAt;
         if(!moving&&!fire) { release(); return; }
         boolean continuing=movement!=null;
         GestureDescription.Builder builder=new GestureDescription.Builder();
@@ -55,6 +57,7 @@ final class GestureEngine {
             builder.addStroke(nextMovement); moveX=x; moveY=y;
         } else if(movement!=null) builder.addStroke(endStroke());
         if(fire) {
+            nextAttackAt=SystemClock.elapsedRealtime()+220;
             AgentCore.Vec2 v=TouchProfile.screenVector(c.controls().aim(),c.width(),c.height());
             Path path=new Path(); path.moveTo(c.profile().attackX()*c.width(),c.profile().attackY()*c.height());
             path.lineTo(clip(c.profile().attackX()*c.width()+v.x()*c.profile().radius()*c.height(),c.width()),

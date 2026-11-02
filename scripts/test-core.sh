@@ -8,10 +8,12 @@ mapfile -t fixtures < <(find tests/java -name '*.java' -print)
 java -m jdk.compiler/com.sun.tools.javac.Main -d "$build_dir" \
     android/app/src/main/java/com/tanuki276/fpssc/FramePixels.java \
     android/app/src/main/java/com/tanuki276/fpssc/AgentCore.java \
+    android/app/src/main/java/com/tanuki276/fpssc/CombatNavigator.java \
     android/app/src/main/java/com/tanuki276/fpssc/ControlLocator.java \
     android/app/src/main/java/com/tanuki276/fpssc/FrameTiming.java \
     android/app/src/main/java/com/tanuki276/fpssc/TouchProfile.java "${fixtures[@]}"
 java -cp "$build_dir" com.tanuki276.fpssc.AgentCoreTest
+java -cp "$build_dir" com.tanuki276.fpssc.CombatRegressionTest
 java -cp "$build_dir" com.tanuki276.fpssc.TouchProfileTest
 java -cp "$build_dir" com.tanuki276.fpssc.FrameTimingTest
 java -cp "$build_dir" com.tanuki276.fpssc.FramePixelsTest

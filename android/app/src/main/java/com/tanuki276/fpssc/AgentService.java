@@ -36,6 +36,7 @@ public final class AgentService extends Service {
 
     private final AtomicBoolean processing = new AtomicBoolean(false);
     static volatile String status = "停止中";
+    static volatile String overlayStatus = "FSCSR · 画面共有待機";
     static volatile boolean active;
     static volatile long statusTime;
     private AgentCore core;
@@ -61,7 +62,7 @@ public final class AgentService extends Service {
         captureThread = new HandlerThread("fpssc-capture");
         captureThread.start();
         captureHandler = new Handler(captureThread.getLooper());
-        NotificationChannel channel = new NotificationChannel(CHANNEL, "FPSSC agent", NotificationManager.IMPORTANCE_LOW);
+        NotificationChannel channel = new NotificationChannel(CHANNEL, "FSCSR agent", NotificationManager.IMPORTANCE_LOW);
         getSystemService(NotificationManager.class).createNotificationChannel(channel);
     }
 
@@ -92,7 +93,7 @@ public final class AgentService extends Service {
             try {
                 startCapture(resultCode, resultData);
             } catch (RuntimeException e) {
-                Log.e("FPSSC", "capture setup failed", e);
+                Log.e("FSCSR", "capture setup failed", e);
                 stopCapture();
                 stopSelf(startId);
             }
@@ -139,7 +140,7 @@ public final class AgentService extends Service {
         reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);
         reader.setOnImageAvailableListener(this::onImage, captureHandler);
         display = projection.createVirtualDisplay(
-                "FPSSC-capture", width, height, densityDpi,
+                "FSCSR-capture", width, height, densityDpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 reader.getSurface(), null, captureHandler);
         active=true;
@@ -174,7 +175,7 @@ public final class AgentService extends Service {
         try {
             image = source.acquireLatestImage();
         } catch (IllegalStateException e) {
-            Log.w("FPSSC", "capture reader unavailable", e);
+            Log.w("FSCSR", "capture reader unavailable", e);
             return;
         }
         if (image == null) return;
@@ -199,6 +200,7 @@ public final class AgentService extends Service {
             Image.Plane plane=planes[0];
             analysisFrame=FramePixels.sampleRgba(plane.getBuffer(),image.getWidth(),image.getHeight(),
                     plane.getPixelStride(),plane.getRowStride(),ANALYSIS_WIDTH,analysisFrame);
+            GameOverlay.excludeFrom(analysisFrame, width, height);
             long convertEnd = SystemClock.elapsedRealtime();
 
             long visionStart = SystemClock.elapsedRealtime();
@@ -216,10 +218,13 @@ public final class AgentService extends Service {
                     + "\n" + controlLocator.status()
                     + (layout == null ? "" : "\n" + layout.profile())
                     + "\n処理時間 " + totalMs + " ms";
+            overlayStatus = "FSCSR " + BuildConfig.VERSION_NAME + " · " + totalMs + " ms · " + command.reason()
+                    + "\n" + core.telemetry()
+                    + "\n移動 " + command.move() + " 射撃 " + command.fire();
             statusTime = SystemClock.elapsedRealtime();
 
             // Capture age is relative queue growth, not absolute source-to-display latency.
-            Log.i("FPSSC", "frame=" + frameCount
+            Log.i("FSCSR", "frame=" + frameCount
                     + " move=" + command.move()
                     + " aim=" + command.aim()
                     + " fire=" + command.fire()
@@ -240,7 +245,7 @@ public final class AgentService extends Service {
             }
         } catch (RuntimeException t) {
             status = "解析エラー: " + t.getClass().getSimpleName();
-            Log.e("FPSSC", "frame failed", t);
+            Log.e("FSCSR", "frame failed", t);
         } finally {
             image.close();
             processing.set(false);
@@ -255,7 +260,7 @@ public final class AgentService extends Service {
                 .addAction(new Notification.Action.Builder(android.R.drawable.ic_media_pause, "停止",
                         android.app.PendingIntent.getService(this, 1, new Intent(this, AgentService.class).setAction("stop"),
                                 android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT)).build())
-                .setContentTitle("FPSSC Android")
+                .setContentTitle("FSCSR Android")
                 .setContentText(text)
                 .setOnlyAlertOnce(true)
                 .setOngoing(true)
@@ -266,7 +271,7 @@ public final class AgentService extends Service {
         try {
             action.run();
         } catch (RuntimeException e) {
-            Log.w("FPSSC", "Failed to release " + resource, e);
+            Log.w("FSCSR", "Failed to release " + resource, e);
         }
     }
 
@@ -284,6 +289,7 @@ public final class AgentService extends Service {
         core = null;
         analysisFrame = null;
         status = "停止中";
+        overlayStatus = "FSCSR · 停止中";
         if (oldReader != null) release("image listener", () -> oldReader.setOnImageAvailableListener(null, null));
         if (oldDisplay != null) release("virtual display", oldDisplay::release);
         if (oldReader != null) release("image reader", oldReader::close);

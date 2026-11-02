@@ -49,6 +49,7 @@ public final class GestureIntegrationTest {
                 System.err.println("SERVICE LOG: "+shell("logcat -d -s FPSSC AndroidRuntime"));
             }
             assertNotNull("Accessibility service did not connect",TouchService.instrumentationInstance());
+            assertTrue("Transparent overlay was not attached",TouchService.instrumentationInstance().overlayVisible());
             instrumentation.runOnMainSync(GestureTestActivity::reset);
             DisplayMetrics dm=new DisplayMetrics();
             activity.getWindowManager().getDefaultDisplay().getRealMetrics(dm);

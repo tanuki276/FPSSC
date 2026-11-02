@@ -14,6 +14,12 @@ final class FramePixels {
     int getWidth() { return width; }
     int getHeight() { return height; }
     int getPixel(int x,int y) { return pixels[y*width+x]; }
+    void maskRect(float left,float top,float right,float bottom) {
+        int x0=Math.max(0,(int)Math.floor(left*width)), y0=Math.max(0,(int)Math.floor(top*height));
+        int x1=Math.min(width,(int)Math.ceil(right*width)), y1=Math.min(height,(int)Math.ceil(bottom*height));
+        if(x1<=x0 || y1<=y0) return;
+        for(int y=y0;y<y1;y++) java.util.Arrays.fill(pixels,y*width+x0,y*width+x1,0xff000000);
+    }
     static FramePixels copy(Bitmap source) {
         if(source==null) return null;
         FramePixels out=new FramePixels(source.getWidth(),source.getHeight());

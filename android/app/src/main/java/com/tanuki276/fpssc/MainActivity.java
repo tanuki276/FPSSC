@@ -35,7 +35,7 @@ public final class MainActivity extends Activity {
         root.setPadding(pad, pad, pad, pad);
 
         TextView title = new TextView(this);
-        title.setText("FPSSC " + BuildConfig.VERSION_NAME + "\n操作位置を自動認識");
+        title.setText("FSCSR " + BuildConfig.VERSION_NAME + "\n操作位置を自動認識");
         title.setTextSize(22f);
         root.addView(title);
 
@@ -74,7 +74,7 @@ public final class MainActivity extends Activity {
             }
             if (enabled && !TouchService.connected()) {
                 automatic.setChecked(false);
-                android.widget.Toast.makeText(this, "Android 設定で FPSSC の操作サービスを有効にしてください", android.widget.Toast.LENGTH_LONG).show();
+                android.widget.Toast.makeText(this, "Android 設定で FSCSR の操作サービスを有効にしてください", android.widget.Toast.LENGTH_LONG).show();
                 return;
             }
             TouchService.arm(enabled);
@@ -87,7 +87,7 @@ public final class MainActivity extends Activity {
         Button share = new Button(this);
         share.setText("診断結果を共有");
         share.setOnClickListener(v -> startActivity(Intent.createChooser(new Intent(Intent.ACTION_SEND)
-                .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "FPSSC diagnostics\n" + AgentService.status + "\n" + TouchService.diagnostics()), "診断結果を共有")));
+                .setType("text/plain").putExtra(Intent.EXTRA_TEXT, "FSCSR diagnostics\n" + AgentService.status + "\n" + TouchService.diagnostics()), "診断結果を共有")));
         root.addView(share);
         android.widget.ScrollView scroll = new android.widget.ScrollView(this);
         scroll.addView(root);
