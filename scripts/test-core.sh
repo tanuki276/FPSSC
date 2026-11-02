@@ -11,13 +11,16 @@ java -m jdk.compiler/com.sun.tools.javac.Main -d "$build_dir" \
     android/app/src/main/java/com/tanuki276/fpssc/CombatNavigator.java \
     android/app/src/main/java/com/tanuki276/fpssc/ControlLocator.java \
     android/app/src/main/java/com/tanuki276/fpssc/FrameTiming.java \
-    android/app/src/main/java/com/tanuki276/fpssc/TouchProfile.java "${fixtures[@]}"
+    android/app/src/main/java/com/tanuki276/fpssc/TouchProfile.java \
+    android/app/src/main/java/com/tanuki276/fpssc/BrawlerProfile.java \
+    android/app/src/main/java/com/tanuki276/fpssc/PracticeCombatPolicy.java "${fixtures[@]}"
 java -cp "$build_dir" com.tanuki276.fpssc.AgentCoreTest
 java -cp "$build_dir" com.tanuki276.fpssc.CombatRegressionTest
 java -cp "$build_dir" com.tanuki276.fpssc.TouchProfileTest
 java -cp "$build_dir" com.tanuki276.fpssc.FrameTimingTest
 java -cp "$build_dir" com.tanuki276.fpssc.FramePixelsTest
 java -cp "$build_dir" com.tanuki276.fpssc.ControlLocatorTest
+java -cp "$build_dir" com.tanuki276.fpssc.PracticeCombatPolicyTest
 if [[ $# -gt 0 ]]; then
     java -cp "$build_dir" com.tanuki276.fpssc.ScreenshotRegressionTest "$@"
 fi
