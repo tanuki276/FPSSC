@@ -82,7 +82,6 @@ final class PracticeVisionDiagnostics {
                     int old=previousLuma[index]&255;
                     int diff=Math.abs(luma-old);
                     if(diff>=30) changed++;
-                    // Motion candidates deliberately reject terrain-colored pixels and large HUD areas.
                     if(diff>=38 && !bushPixel && !crateMask[index] && !isNearBlack(r,g,b)
                             && x>width*.035f && x<width*.965f && y>height*.09f && y<height*.82f)
                         motionMask[index]=true;
@@ -90,19 +89,24 @@ final class PracticeVisionDiagnostics {
             }
         }
 
+        float frameChange=playable==0?0f:changed/(float)playable;
+        // Camera pans, transitions and large flashes create broad frame-wide differences.
+        // Suppress motion-object claims for that frame instead of interpreting the scene shift as projectiles.
+        if(frameChange>.16f) java.util.Arrays.fill(motionMask,false);
+
         List<Blob> crates=components(crateMask,true);
         List<Blob> moving=components(motionMask,false);
         int stableCrates=temporalMatches(crates,previousCrates,.055f);
-        int stableMoving=temporalMatches(moving,previousMotion,.085f);
+        int stableMoving=frameChange>.16f?0:temporalMatches(moving,previousMotion,.085f);
 
         float crateConfidence=crates.isEmpty()?0f:clamp((stableCrates+.35f)/(crates.size()+.35f),0f,1f);
         float motionConfidence=moving.isEmpty()?0f:clamp((stableMoving+.25f)/(moving.size()+.25f),0f,1f);
+        if(frameChange>.16f) motionConfidence=0f;
         float bushCoverage=playable==0?0f:bush/(float)playable;
-        float frameChange=playable==0?0f:changed/(float)playable;
 
         previousLuma=currentLuma;
         previousCrates=top(crates,16);
-        previousMotion=top(moving,32);
+        previousMotion=frameChange>.16f?List.of():top(moving,32);
         previousTimeMs=nowMs;
         return new Result(crates.size(),stableCrates,crateConfidence,bushCoverage,
                 moving.size(),stableMoving,motionConfidence,frameChange);
@@ -144,7 +148,6 @@ final class PracticeVisionDiagnostics {
                         bw/(float)width,bh/(float)height,tail,clamp(fill*.45f+shapeScore*.30f+sizeScore*.25f,0f,1f)));
             } else {
                 if(area<.000015f||area>.0022f||fill<.16f) continue;
-                // Fast effects tend to be compact; broad flashes are rejected by the area cap.
                 float compact=clamp(fill/.65f,0f,1f);
                 out.add(new Blob((minX+maxX)*.5f/width,(minY+maxY)*.5f/height,
                         bw/(float)width,bh/(float)height,tail,compact));
