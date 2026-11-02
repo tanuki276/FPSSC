@@ -21,6 +21,7 @@ java -cp "$build_dir" com.tanuki276.fpssc.FrameTimingTest
 java -cp "$build_dir" com.tanuki276.fpssc.FramePixelsTest
 java -cp "$build_dir" com.tanuki276.fpssc.ControlLocatorTest
 java -cp "$build_dir" com.tanuki276.fpssc.PracticeCombatPolicyTest
+java -cp "$build_dir" com.tanuki276.fpssc.PracticeCombatBenchmarkTest
 if [[ $# -gt 0 ]]; then
     java -cp "$build_dir" com.tanuki276.fpssc.ScreenshotRegressionTest "$@"
 fi
