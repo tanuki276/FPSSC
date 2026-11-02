@@ -91,13 +91,11 @@ final class GameOverlay {
         profile=new Button(service);
         profile.setText(PracticeProfileStore.compactLabel(service));
         profile.setOnClickListener(v->{
-            BrawlerProfile p=PracticeProfileStore.step(service,1);
-            AgentService.profileChanged(p);
+            PracticeProfileStore.step(service,1);
             profile.setText(PracticeProfileStore.compactLabel(service));
         });
         profile.setOnLongClickListener(v->{
-            BrawlerProfile p=PracticeProfileStore.step(service,-1);
-            AgentService.profileChanged(p);
+            PracticeProfileStore.step(service,-1);
             profile.setText(PracticeProfileStore.compactLabel(service));
             return true;
         });
